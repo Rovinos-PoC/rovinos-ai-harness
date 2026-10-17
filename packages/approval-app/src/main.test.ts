@@ -16,8 +16,13 @@ const telemetry = vi.hoisted(() => {
     setHostMetadata(metadata: unknown): void;
     traceContext: { readonly traceId: string | undefined };
   }[] = [];
-  return { instances };
+  const lifecycles: {
+    reportError: ReturnType<typeof vi.fn>;
+    decisionDurationMs: ReturnType<typeof vi.fn>;
+  }[] = [];
+  return { instances, lifecycles };
 });
+const actionMounts = vi.hoisted(() => ({ options: [] as unknown[] }));
 
 vi.mock("@modelcontextprotocol/ext-apps", async (importOriginal) => {
   const actual = await importOriginal<typeof Apps>();
@@ -47,6 +52,36 @@ vi.mock("@harness/app-telemetry", async (importOriginal) => {
   };
 });
 
+vi.mock("./actions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./actions.js")>();
+  return {
+    ...actual,
+    mountApprovalActions: (
+      actions: HTMLElement,
+      editHost: HTMLElement,
+      options: Parameters<typeof actual.mountApprovalActions>[2],
+    ) => {
+      actionMounts.options.push(options);
+      return actual.mountApprovalActions(actions, editHost, options);
+    },
+  };
+});
+
+vi.mock("./telemetry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./telemetry.js")>();
+  return {
+    ...actual,
+    createApprovalTelemetry: (...args: Parameters<typeof actual.createApprovalTelemetry>) => {
+      const lifecycle = actual.createApprovalTelemetry(...args);
+      telemetry.lifecycles.push({
+        reportError: vi.spyOn(lifecycle, "reportError"),
+        decisionDurationMs: vi.spyOn(lifecycle, "decisionDurationMs"),
+      });
+      return lifecycle;
+    },
+  };
+});
+
 const payload = {
   payloadVersion: 1,
   kind: "tool_call",
@@ -60,16 +95,43 @@ const payload = {
   editableFields: [],
 };
 
-afterEach(() => {
+const originalRequestAnimationFrame = Object.getOwnPropertyDescriptor(
+  window,
+  "requestAnimationFrame",
+);
+
+function installAnimationFrame(): void {
+  Object.defineProperty(window, "requestAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: (callback: FrameRequestCallback) => {
+      callback(window.performance.now());
+      return 1;
+    },
+  });
+}
+
+afterEach(async () => {
   window.dispatchEvent(new Event("pagehide"));
+  if (originalRequestAnimationFrame === undefined) {
+    Reflect.deleteProperty(window, "requestAnimationFrame");
+  } else {
+    Object.defineProperty(window, "requestAnimationFrame", originalRequestAnimationFrame);
+  }
   vi.useRealTimers();
+  await vi.waitFor(() => {
+    expect(telemetry.instances.every((instance) => !instance.active)).toBe(true);
+  });
   vi.resetModules();
   vi.clearAllMocks();
   telemetry.instances.length = 0;
+  telemetry.lifecycles.length = 0;
+  actionMounts.options.length = 0;
   document.body.replaceChildren();
 });
 
 async function start() {
+  installAnimationFrame();
   bridge.connect.mockResolvedValue(undefined);
   bridge.call.mockResolvedValue({ content: [] });
   await import("./main.js");
@@ -178,6 +240,7 @@ describe("approval app SDK bootstrap", () => {
   });
 
   it("handles a failed connection without exposing the exception", async () => {
+    installAnimationFrame();
     bridge.connect.mockRejectedValue(new Error("SYNTHETIC_BRIDGE_CANARY"));
     bridge.call.mockRejectedValue(new Error("SYNTHETIC_TRANSPORT_CANARY"));
     await import("./main.js");
@@ -186,10 +249,72 @@ describe("approval app SDK bootstrap", () => {
     });
     expect(document.body.textContent).not.toContain("SYNTHETIC");
     expect(JSON.stringify(bridge.call.mock.calls)).not.toContain("SYNTHETIC");
-    expect(bridge.call).not.toHaveBeenCalled();
+    expect(telemetry.instances[0]?.active).toBe(false);
+    expect(telemetry.lifecycles[0]?.reportError.mock.calls).toEqual([
+      ["bridge_unavailable"],
+      ["payload_invalid"],
+    ]);
+    expect(
+      bridge.call.mock.calls.every(([request]) => request.name === "harness.telemetry.emit"),
+    ).toBe(true);
+  });
+
+  it("wires error, decision-duration, and interaction-flush hooks into mounted actions", async () => {
+    const app = await start();
+    app.dispatch("toolinput", {
+      arguments: {
+        approvalId: "00000000000000000000000003",
+        payload,
+      },
+    });
+    const options = actionMounts.options[0] as
+      | {
+          reportError: (code: "resolve_failed" | "reveal_failed") => void;
+          decisionDurationMs: () => number;
+          flushInteractions: () => void;
+        }
+      | undefined;
+    const lifecycle = telemetry.lifecycles[0];
+    if (options === undefined || lifecycle === undefined) {
+      throw new Error("Approval action telemetry hooks were not mounted.");
+    }
+    options.reportError("resolve_failed");
+    options.decisionDurationMs();
+    options.flushInteractions();
+    expect(lifecycle.reportError).toHaveBeenCalledExactlyOnceWith("resolve_failed");
+    expect(lifecycle.decisionDurationMs).toHaveBeenCalledOnce();
+    window.dispatchEvent(new Event("pagehide"));
+  });
+
+  it("keeps the view and telemetry listeners alive across a persisted pagehide", async () => {
+    vi.useFakeTimers();
+    const app = await start();
+    app.dispatch("toolinput", {
+      arguments: {
+        approvalId: "00000000000000000000000003",
+        payload,
+      },
+    });
+    bridge.call.mockResolvedValue({ content: [], structuredContent: { ok: true } });
+    const timersBeforePageHide = vi.getTimerCount();
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true }));
+    expect(document.querySelector("h1")?.textContent).toBe(payload.summary);
+    expect(vi.getTimerCount()).toBe(timersBeforePageHide);
+    document.querySelector<HTMLButtonElement>("button")?.click();
+    await vi.waitFor(() => {
+      expect(
+        bridge.call.mock.calls.some(([request]) => request.name === "harness.approvals.resolve"),
+      ).toBe(true);
+    });
+    window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: false }));
+    document.querySelector<HTMLButtonElement>("button")?.click();
+    expect(
+      bridge.call.mock.calls.filter(([request]) => request.name === "harness.approvals.resolve"),
+    ).toHaveLength(1);
   });
 
   it("waits for a delayed SDK connection before starting telemetry activation", async () => {
+    installAnimationFrame();
     vi.useFakeTimers();
     let resolveConnection: (() => void) | undefined;
     bridge.connect.mockReturnValue(

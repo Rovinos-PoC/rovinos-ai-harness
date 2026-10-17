@@ -9,6 +9,7 @@ import {
   parseJson,
 } from "@harness/schemas/browser";
 import { mountApprovalActions } from "./actions.js";
+import { createApprovalTelemetry } from "./telemetry.js";
 import { createApprovalView } from "./view.js";
 
 const app = new App({ name: "harness-approval", version: "0.0.0" }, {}, { autoResize: false });
@@ -56,13 +57,13 @@ const telemetry = createAppTelemetry({
     },
   },
   hostReady: hostConnection,
-  manifest: { spans: ["ui.error", "ui.decision"] },
+  manifest: { spans: ["ui.error", "ui.decision", "ui.render", "ui.interaction"] },
 });
+const uiTelemetry = createApprovalTelemetry(telemetry);
 const view = createApprovalView(document.body, {
   clock: { now: () => Date.now() },
   onError: (code) => {
-    telemetry.record("ui.error", { code });
-    void telemetry.flush();
+    uiTelemetry.reportError(code);
   },
   onPayload: ({
     payload,
@@ -91,6 +92,9 @@ const view = createApprovalView(document.body, {
         callTool: callApprovalTool,
       },
       telemetry,
+      reportError: uiTelemetry.reportError,
+      decisionDurationMs: uiTelemetry.decisionDurationMs,
+      flushInteractions: uiTelemetry.flushInteractions,
       renderRevealed,
       onDecision,
     });
@@ -101,47 +105,54 @@ const view = createApprovalView(document.body, {
 });
 
 app.addEventListener("toolinput", (params) => {
-  view.receive(params.arguments);
+  uiTelemetry.receivePayload(() => {
+    return view.receive(params.arguments);
+  });
 });
 app.addEventListener("toolresult", (params) => {
-  telemetry.setHostMetadata(params._meta);
-  if (params.isError === true) {
-    view.receive(undefined);
-    return;
-  }
-  if (params.structuredContent !== undefined) {
-    view.receive(params.structuredContent);
-    return;
-  }
-  const text = params.content.find((part) => part.type === "text");
-  try {
-    view.receive(
-      text?.type === "text"
-        ? parseJson(ApprovalAppInputSchema.or(ApprovalPayloadSchema), text.text)
-        : undefined,
-    );
-  } catch {
-    view.receive(undefined);
-  }
+  uiTelemetry.receivePayload(() => {
+    telemetry.setHostMetadata(params._meta);
+    if (params.isError === true) {
+      return view.receive(undefined);
+    }
+    if (params.structuredContent !== undefined) {
+      return view.receive(params.structuredContent);
+    }
+    const text = params.content.find((part) => part.type === "text");
+    try {
+      return view.receive(
+        text?.type === "text"
+          ? parseJson(ApprovalAppInputSchema.or(ApprovalPayloadSchema), text.text)
+          : undefined,
+      );
+    } catch {
+      return view.receive(undefined);
+    }
+  });
 });
 const interval = window.setInterval(() => {
   view.tick();
 }, 1000);
-window.addEventListener(
-  "pagehide",
-  () => {
-    window.clearInterval(interval);
-    view.dispose();
-    void telemetry.dispose();
-  },
-  { once: true },
-);
+const onPageHide = (event: PageTransitionEvent): void => {
+  if (event.persisted) {
+    return;
+  }
+  window.removeEventListener("pagehide", onPageHide);
+  window.clearInterval(interval);
+  uiTelemetry.dispose();
+  view.dispose();
+  void telemetry.dispose();
+};
+window.addEventListener("pagehide", onPageHide);
 void app.connect().then(
   () => {
     finishHostConnection(true);
   },
   () => {
     finishHostConnection(false);
-    view.receive(undefined);
+    uiTelemetry.reportError("bridge_unavailable");
+    uiTelemetry.receivePayload(() => {
+      return view.receive(undefined);
+    });
   },
 );

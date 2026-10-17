@@ -30,7 +30,7 @@ export interface ApprovalViewOptions {
 
 /** One approval view with an explicit refresh hook for its injected clock. */
 export interface ApprovalView {
-  receive(input: unknown): void;
+  receive(input: unknown): boolean;
   tick(): void;
   dispose(): void;
 }
@@ -239,14 +239,28 @@ export function createApprovalView(root: HTMLElement, options: ApprovalViewOptio
   const dom = createViewDom(root);
   let refresh = (): void => undefined;
   let cleanupActions = (): void => undefined;
+  let previousContentKey: string | undefined;
 
-  function receive(input: unknown): void {
-    cleanupActions();
-    cleanupActions = (): void => undefined;
+  function receive(input: unknown): boolean {
     const appInput = ApprovalAppInputSchema.safeParse(input);
     const parsed = ApprovalPayloadSchema.safeParse(
       appInput.success ? appInput.data.payload : input,
     );
+    if (!parsed.success) {
+      options.onError("payload_invalid");
+    }
+    const contentKey = parsed.success
+      ? JSON.stringify({
+          payload: parsed.data,
+          approvalId: appInput.success ? appInput.data.approvalId : undefined,
+        })
+      : "invalid";
+    if (contentKey === previousContentKey) {
+      return false;
+    }
+    previousContentKey = contentKey;
+    cleanupActions();
+    cleanupActions = (): void => undefined;
     dom.content.replaceChildren();
     refresh = (): void => undefined;
     if (!parsed.success) {
@@ -254,9 +268,8 @@ export function createApprovalView(root: HTMLElement, options: ApprovalViewOptio
       if (dom.status.textContent !== "Invalid approval payload") {
         dom.status.textContent = "Invalid approval payload";
       }
-      options.onError("payload_invalid");
       dom.heading.focus();
-      return;
+      return true;
     }
     const rendered = createPayloadView({
       ...dom,
@@ -268,6 +281,7 @@ export function createApprovalView(root: HTMLElement, options: ApprovalViewOptio
     refresh = rendered.refresh;
     refresh();
     dom.heading.focus();
+    return true;
   }
 
   return {

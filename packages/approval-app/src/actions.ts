@@ -6,10 +6,7 @@ import { mountRevealFlow, type RevealFlow } from "./reveal.js";
 
 /** Terminal outcome returned by the approval resolve tool. */
 export type ApprovalDecision = "approve" | "deny" | "edit";
-type AppTelemetryForActions = Pick<
-  AppTelemetry<readonly ["ui.decision", "ui.error"]>,
-  "record" | "flush"
->;
+type AppTelemetryForActions = Pick<AppTelemetry<readonly ["ui.decision"]>, "record" | "flush">;
 
 /** The host bridge methods used by the approval decision and reveal controls. */
 export interface ApprovalActionsBridge {
@@ -26,6 +23,9 @@ export interface ApprovalActionsOptions {
   readonly isExpired: () => boolean;
   readonly bridge: ApprovalActionsBridge;
   readonly telemetry: AppTelemetryForActions;
+  readonly reportError: (code: "resolve_failed" | "reveal_failed") => void;
+  readonly decisionDurationMs: () => number;
+  readonly flushInteractions: () => void;
   readonly renderRevealed: (values: ReadonlyMap<string, string>) => void;
   readonly onDecision: (decision: ApprovalDecision) => void;
 }
@@ -128,8 +128,7 @@ const isExpired = (context: ActionContext): boolean => context.options.isExpired
 function reportError(context: ActionContext, code: UiErrorCode, message: string): void {
   const { status } = context;
   status.textContent = message;
-  context.options.telemetry.record("ui.error", { code });
-  void context.options.telemetry.flush();
+  context.options.reportError(code);
 }
 
 function decisionStatus(decision: ApprovalDecision): string {
@@ -152,6 +151,7 @@ async function resolveDecision(
   if (isExpired(context)) {
     return;
   }
+  const decisionDurationMs = context.options.decisionDurationMs();
   const request = ResolveRequest.safeParse({
     approvalId: context.options.approvalId,
     decision,
@@ -173,8 +173,9 @@ async function resolveDecision(
       setBusy(context, false);
       return;
     }
-    context.options.telemetry.record("ui.decision", { decision });
+    context.options.telemetry.record("ui.decision", { decision }, decisionDurationMs);
     void context.options.telemetry.flush();
+    context.options.flushInteractions();
     status.textContent = decisionStatus(decision);
     context.options.onDecision(decision);
     context.state.editForm?.remove();
