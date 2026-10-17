@@ -11,6 +11,7 @@ import type {
   ModelUsage as SharedModelUsage,
   Part,
   PiiActionSummary,
+  RunConfig,
   Sha256Hex,
   ToolSpec,
 } from "@harness/schemas";
@@ -39,6 +40,8 @@ export interface RunContext {
     readonly childRunId: Id;
     readonly role: Code;
     readonly parentCallId: Id;
+    readonly budgetLimits?: RunConfig["budgets"];
+    readonly budgetDeadlineTs?: number;
   }) => Promise<void>;
   /** Durable metadata-only completion summary for a terminal child run. */
   readonly recordSubagentCompleted?: (event: {
@@ -46,6 +49,7 @@ export interface RunContext {
     readonly outcome: "completed" | "failed" | "cancelled";
     readonly inputTokens: number;
     readonly outputTokens: number;
+    readonly steps?: number;
     readonly costMicros?: number;
   }) => Promise<void>;
   /** Structured-output contract used only for the child's final result call. */

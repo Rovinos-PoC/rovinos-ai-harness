@@ -273,9 +273,9 @@ async function continueClaimedRun(execution: ResumeExecution): Promise<Event> {
   await restoreWorkspace(execution);
   await options.context.restore(snapshot?.context, eventsAfterSnapshot);
 
-  const budgetTracker = new BudgetTracker(options.budgets);
+  const budgetTracker = new BudgetTracker(options.budgets, undefined, options.deadlineTs);
   const beforeToolExecution = async (): Promise<void> => {
-    const violation = budgetTracker.check(foldRunState(events), options.clock.now());
+    const violation = budgetTracker.checkWithOpenChildren(events, options.clock.now());
     if (!violation.ok) {
       await recordBudgetFailureAndCheckpoint(recorder, events, violation, checkpointer);
       throw new ResumeBudgetExceededError();

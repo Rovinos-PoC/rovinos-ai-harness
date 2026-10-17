@@ -13,8 +13,8 @@ import { BudgetTracker, type BudgetViolation } from "./budgets.js";
 import { createRunCheckpointer, type Checkpointer } from "./checkpoint.js";
 import { foldRunState, isTerminalRunState, planLastModelResponseRecovery } from "./run-state.js";
 import type { RunState } from "./run-state.js";
-import type { Clock, EventPartial, RunRecorder } from "./recorder.js";
-import { RUN_SPAN, runSpanAttributes } from "./spans.js";
+import type { Clock, RunRecorder } from "./recorder.js";
+import { withRunStartup } from "./run-startup.js";
 import type { ModelStepResult } from "./steps/model-step.js";
 import { requestModel } from "./steps/request-model.js";
 import { preflightModelBudget, recordBudgetFailureAndCheckpoint } from "./steps/model-preflight.js";
@@ -50,8 +50,12 @@ export interface RunLoopOptions extends NewRunMetadata, RunContinuationMetadata 
   readonly signal: AbortSignal;
   /** Called after the initial event batch has been durably appended. */
   readonly onStarted?: () => void;
+  /** Checks durable startup preconditions before the first execution step. */
+  readonly shouldContinue?: (events: Event[]) => Promise<boolean>;
   /** Per-run limits sourced from the validated run configuration. */
   readonly budgets: RunConfig["budgets"];
+  /** Absolute inherited deadline preserved across child startup and resume. */
+  readonly deadlineTs?: number;
   /** Optional inherited budget failure to record before executing this run. */
   readonly initialBudgetViolation?: BudgetViolation;
   readonly checkpointEveryEvents?: RunConfig["checkpointEveryEvents"];
@@ -104,61 +108,22 @@ class RunAbortedError extends HarnessError {
  */
 export async function runLoop(options: RunLoopOptions): Promise<RunLoopResult> {
   const events: Event[] = [];
-  let result: RunLoopResult | undefined;
-  const budgetTracker = new BudgetTracker(options.budgets, options.initialBudgetViolation);
-  const startEvents: EventPartial[] = [
-    {
-      type: "run_created",
-      v: 1,
-      configHash: options.configHash,
-      policyVersion: options.policyVersion,
-      ...(options.parentRunId === undefined ? {} : { parentRunId: options.parentRunId }),
-      ...(options.parentCallId === undefined ? {} : { parentCallId: options.parentCallId }),
-      ...(options.continuationOf === undefined ? {} : { continuationOf: options.continuationOf }),
-      ...(options.scopeId === undefined ? {} : { scopeId: options.scopeId }),
-      depth: options.depth ?? 0,
-    },
-    {
-      type: "run_input",
-      v: 1,
-      input: options.goal,
-      inputKind: options.inputKind ?? "initial",
-    },
-    { type: "run_status_changed", v: 1, from: "pending", to: "running", reason: "start" },
-  ];
-  await options.recorder.withStepSpan(
-    RUN_SPAN,
-    runSpanAttributes(options),
-    async () => {
-      const recorded = await options.recorder.recordBatch(startEvents);
-      const last = recorded.at(-1);
-      if (last === undefined) {
-        throw new Error("Expected run creation events.");
-      }
-      events.push(...recorded);
-      options.onStarted?.();
-      const runId = last.runId;
-      await drainSentinelTrips(options.recorder, events);
-      const ended = await continueRunLoop(options, events, runId, budgetTracker);
-      const state = foldRunState(events);
-      result = {
-        status: state.status,
-        approvalIds: Array.from(state.pendingApprovals.keys()),
-        state,
-        events,
-      };
-      return ended;
-    },
-    {
-      ...(options.rootSpanLinks === undefined ? {} : { links: options.rootSpanLinks }),
-      ...(options.rootSpanParent === undefined ? {} : { parentContext: options.rootSpanParent }),
-    },
+  const budgetTracker = new BudgetTracker(
+    options.budgets,
+    options.initialBudgetViolation,
+    options.deadlineTs,
   );
-
-  if (result === undefined) {
-    throw new Error("Expected the run loop to record an outcome.");
-  }
-  return result;
+  await withRunStartup(options, events, async (runId) => {
+    await drainSentinelTrips(options.recorder, events);
+    return continueRunLoop(options, events, runId, budgetTracker);
+  });
+  const state = foldRunState(events);
+  return {
+    status: state.status,
+    approvalIds: Array.from(state.pendingApprovals.keys()),
+    state,
+    events,
+  };
 }
 
 /**
@@ -174,7 +139,7 @@ export async function continueRunLoop(
   options: RunLoopExecutionOptions,
   events: Event[],
   runId: Id,
-  budgetTracker = new BudgetTracker(options.budgets),
+  budgetTracker = new BudgetTracker(options.budgets, undefined, options.deadlineTs),
 ): Promise<Event> {
   const checkpointer = createRunCheckpointer(options, runId);
   const execution = { runId, checkpointer, budgetTracker };
@@ -228,6 +193,7 @@ async function runLoopSteps(
       budgetTracker: execution.budgetTracker,
       checkpointer: execution.checkpointer,
       events,
+      budgets: options.budgets,
       now: options.clock.now(),
       recorder: options.recorder,
     });
@@ -331,6 +297,7 @@ async function prepareModelStep(
     budgetTracker: execution.budgetTracker,
     checkpointer: execution.checkpointer,
     events,
+    budgets: options.budgets,
     now: options.clock.now(),
     recorder: options.recorder,
   });
@@ -355,7 +322,7 @@ async function runToolCalls(
     if (aborted !== undefined) {
       return aborted;
     }
-    const budget = execution.budgetTracker.check(foldRunState(events), options.clock.now());
+    const budget = execution.budgetTracker.checkWithOpenChildren(events, options.clock.now());
     if (!budget.ok) {
       return recordBudgetFailureAndCheckpoint(
         options.recorder,

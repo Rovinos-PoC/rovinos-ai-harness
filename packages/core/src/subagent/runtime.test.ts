@@ -224,6 +224,7 @@ describe("production subagent runtime", () => {
           outcome,
           inputTokens,
           outputTokens,
+          steps,
           costMicros,
         }) => {
           await parentRecorder.record({
@@ -233,6 +234,7 @@ describe("production subagent runtime", () => {
             outcome,
             inputTokens,
             outputTokens,
+            ...(steps === undefined ? {} : { steps }),
             ...(costMicros === undefined ? {} : { costMicros }),
           });
         },
@@ -441,6 +443,16 @@ describe("production subagent runtime", () => {
     );
     let spawnResult: Awaited<ReturnType<ToolPort["execute"]>> | undefined;
     await parentRecorder.withStepSpan(TOOL_CALL_SPAN, {}, async () => {
+      await parentRecorder.record({
+        type: "tool_intent",
+        v: 1,
+        callId: parentCallId,
+        toolId: "agent.spawn",
+        idempotent: false,
+        policyDecision: "allow",
+        argsHash: configHash,
+        args: {},
+      });
       const result = await childTool.execute(
         {
           callId: parentCallId,
@@ -489,6 +501,16 @@ describe("production subagent runtime", () => {
     const invalidCallId = Id.parse("22222222222222222222222222");
     let invalidResult: Awaited<ReturnType<ToolPort["execute"]>> | undefined;
     await parentRecorder.withStepSpan(TOOL_CALL_SPAN, {}, async () => {
+      await parentRecorder.record({
+        type: "tool_intent",
+        v: 1,
+        callId: invalidCallId,
+        toolId: "agent.spawn",
+        idempotent: false,
+        policyDecision: "allow",
+        argsHash: configHash,
+        args: {},
+      });
       const result = await childTool.execute(
         {
           callId: invalidCallId,

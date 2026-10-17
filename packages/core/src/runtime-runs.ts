@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { type Code, type Id, type JsonValue, type RunInput } from "@harness/schemas";
+import {
+  type Code,
+  type Id,
+  type JsonValue,
+  type RunConfig,
+  type RunInput,
+} from "@harness/schemas";
 import type { EventStore } from "@harness/store";
 import type { RunScopeRegistry } from "./subagent/scope.js";
 import type { ToolPort } from "./ports.js";
@@ -21,6 +27,37 @@ export async function readStoredGoal(store: EventStore, runId: Id): Promise<Json
       if (goalPart?.type === "text") {
         return goalPart.text;
       }
+    }
+  }
+  return undefined;
+}
+
+/** Recovers an inherited child allocation so runtime recreation cannot widen its limits. */
+export async function readChildBudgetAllocation(
+  store: EventStore,
+  runId: Id,
+): Promise<{ readonly budgets: RunConfig["budgets"]; readonly deadlineTs: number } | undefined> {
+  let parentRunId: Id | undefined;
+  for await (const event of store.read(runId)) {
+    if (event.type === "run_created") {
+      parentRunId = event.parentRunId;
+      break;
+    }
+  }
+  if (parentRunId === undefined) {
+    return undefined;
+  }
+  for await (const event of store.read(parentRunId)) {
+    if (
+      event.type === "subagent_spawned" &&
+      event.childRunId === runId &&
+      event.budgetLimits !== undefined &&
+      event.budgetDeadlineTs !== undefined
+    ) {
+      return {
+        budgets: event.budgetLimits,
+        deadlineTs: event.budgetDeadlineTs,
+      };
     }
   }
   return undefined;

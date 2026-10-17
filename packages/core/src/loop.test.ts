@@ -1112,6 +1112,97 @@ describe("approval lifecycle", () => {
 });
 
 describe("runLoop", () => {
+  it("records cancellation when the startup guard rejects a new run", async () => {
+    const store = new InMemoryEventStore();
+    const clock = new FakeClock(100);
+    const model = new FakeModelPort([completion()]);
+    const recorder = new RunRecorder(store, runId, segmentId, 0, clock);
+
+    const result = await runLoop({
+      recorder,
+      clock,
+      model,
+      tool: new FakeToolPort(),
+      context: new NaiveContext(),
+      ids: new SequentialIdGenerator(),
+      goal: "guarded run goal",
+      signal: new AbortController().signal,
+      budgets: defaultBudgets,
+      configHash,
+      policyVersion: "test.policy",
+      shouldContinue: () => Promise.resolve(false),
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(model.requests).toHaveLength(0);
+    expect(result.events.at(-1)).toMatchObject({
+      type: "run_status_changed",
+      to: "cancelled",
+      reason: "cancel_requested",
+    });
+  });
+
+  it("respects a terminal event written by the startup guard", async () => {
+    const store = new InMemoryEventStore();
+    const clock = new FakeClock(100);
+    const recorder = new RunRecorder(store, runId, segmentId, 0, clock);
+    const result = await runLoop({
+      recorder,
+      clock,
+      model: new FakeModelPort([completion()]),
+      tool: new FakeToolPort(),
+      context: new NaiveContext(),
+      ids: new SequentialIdGenerator(),
+      goal: "terminal guarded run goal",
+      signal: new AbortController().signal,
+      budgets: defaultBudgets,
+      configHash,
+      policyVersion: "test.policy",
+      shouldContinue: async (events) => {
+        events.push(
+          await recorder.record({
+            type: "run_status_changed",
+            v: 1,
+            from: "running",
+            to: "cancelled",
+            reason: "cancel_requested",
+          }),
+        );
+        return false;
+      },
+    });
+
+    expect(result.status).toBe("cancelled");
+    expect(result.events.at(-1)).toMatchObject({
+      type: "run_status_changed",
+      to: "cancelled",
+      reason: "cancel_requested",
+    });
+  });
+
+  it("rejects an empty initial event batch", async () => {
+    const store = new InMemoryEventStore();
+    const clock = new FakeClock(100);
+    const recorder = new RunRecorder(store, runId, segmentId, 0, clock);
+    vi.spyOn(recorder, "recordBatch").mockResolvedValue([]);
+
+    await expect(
+      runLoop({
+        recorder,
+        clock,
+        model: new FakeModelPort([completion()]),
+        tool: new FakeToolPort(),
+        context: new NaiveContext(),
+        ids: new SequentialIdGenerator(),
+        goal: "empty startup batch goal",
+        signal: new AbortController().signal,
+        budgets: defaultBudgets,
+        configHash,
+        policyVersion: "test.policy",
+      }),
+    ).rejects.toThrow("Expected run creation events.");
+  });
+
   it("drains a concurrent sentinel trip into the run log without exposing its canary", async () => {
     const store = new InMemoryEventStore();
     const clock = new FakeClock(100);

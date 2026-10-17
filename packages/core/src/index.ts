@@ -153,6 +153,7 @@ export {
   type ConfiguredStoreOptions,
 } from "./runtime-store.js";
 export { RunScopeConflictError, RunScopeRegistry } from "./subagent/scope.js";
+export { ChildBudgetExceededError, deriveChildBudgets } from "./subagent/budgets.js";
 export { finalizeChild, SubagentResultSchema, type SubagentResult } from "./subagent/result.js";
 export { AgentSpawnInputSchema, AgentSpawnTool } from "./subagent/spawn-tool.js";
 export {

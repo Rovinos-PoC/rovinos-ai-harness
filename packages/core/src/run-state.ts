@@ -199,6 +199,16 @@ function applyToolResult(
   return { ...state, pendingToolCalls };
 }
 
+function applyToolLifecycle(state: MutableRunState, event: Event): MutableRunState | undefined {
+  if (event.type === "tool_intent") {
+    return applyToolIntent(state, event);
+  }
+  if (event.type === "tool_result") {
+    return applyToolResult(state, event);
+  }
+  return undefined;
+}
+
 function applyApprovalRequest(
   state: MutableRunState,
   event: ApprovalRequestedEvent,
@@ -229,6 +239,21 @@ function applyApprovalResolution(
   return { ...state, pendingApprovals, resolvedApprovals };
 }
 
+function applySubagentCompletion(
+  state: MutableRunState,
+  event: Extract<Event, { type: "subagent_completed" }>,
+): MutableRunState {
+  return {
+    ...state,
+    steps: state.steps + (event.steps ?? 0),
+    usage: {
+      inputTokens: state.usage.inputTokens + event.inputTokens,
+      outputTokens: state.usage.outputTokens + event.outputTokens,
+      costMicros: state.usage.costMicros + (event.costMicros ?? 0),
+    },
+  };
+}
+
 function applyEvent(state: MutableRunState, event: Event, runId: Event["runId"]): MutableRunState {
   if (event.seq !== state.nextSeq || event.runId !== runId || event.type === "run_created") {
     throw new CorruptLogError();
@@ -256,11 +281,12 @@ function applyEvent(state: MutableRunState, event: Event, runId: Event["runId"])
       },
     };
   }
-  if (event.type === "tool_intent") {
-    return applyToolIntent(withEnvelope, event);
+  if (event.type === "subagent_completed") {
+    return applySubagentCompletion(withEnvelope, event);
   }
-  if (event.type === "tool_result") {
-    return applyToolResult(withEnvelope, event);
+  const toolLifecycle = applyToolLifecycle(withEnvelope, event);
+  if (toolLifecycle !== undefined) {
+    return toolLifecycle;
   }
   if (event.type === "approval_requested") {
     return applyApprovalRequest(withEnvelope, event);

@@ -111,7 +111,14 @@ export const eventSamples = [
     entities: [{ type: "email", count: 1 }],
   },
   { ...envelope, type: "budget_exceeded", budget: "steps", limit: 1, observed: 2 },
-  { ...envelope, type: "subagent_spawned", childRunId: id, role: "researcher" },
+  {
+    ...envelope,
+    type: "subagent_spawned",
+    childRunId: id,
+    role: "researcher",
+    budgetLimits: { maxSteps: 10, maxWallClockMs: 1000, countSuspendedTime: false },
+    budgetDeadlineTs: 1000,
+  },
   {
     ...envelope,
     type: "subagent_completed",

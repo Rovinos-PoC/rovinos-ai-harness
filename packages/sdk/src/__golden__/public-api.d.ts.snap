@@ -62,6 +62,11 @@ export declare const CreateHarnessOptionsSchema: z.ZodUnion<readonly [z.ZodObjec
                     fail: "fail";
                 }>>;
             }, z.core.$strict>>;
+            subagents: z.ZodPrefault<z.ZodObject<{
+                maxDepth: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+                maxChildrenPerRun: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+                maxConcurrentChildren: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+            }, z.core.$strict>>;
             budgets: z.ZodPrefault<z.ZodObject<{
                 maxSteps: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
                 maxCostUsd: z.ZodOptional<z.ZodCoercedNumber<unknown>>;

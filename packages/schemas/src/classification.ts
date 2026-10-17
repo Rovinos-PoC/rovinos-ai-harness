@@ -104,12 +104,19 @@ export const EVENT_FIELD_CLASS = {
   },
   pii_action: { boundary: "meta", action: "meta", toolId: "meta", entities: "meta" },
   budget_exceeded: { budget: "meta", limit: "meta", observed: "meta" },
-  subagent_spawned: { childRunId: "meta", role: "meta", parentCallId: "meta" },
+  subagent_spawned: {
+    childRunId: "meta",
+    role: "meta",
+    parentCallId: "meta",
+    budgetLimits: "meta",
+    budgetDeadlineTs: "meta",
+  },
   subagent_completed: {
     childRunId: "meta",
     outcome: "meta",
     inputTokens: "meta",
     outputTokens: "meta",
+    steps: "meta",
     costMicros: "meta",
   },
 } satisfies { [T in EventType]: Record<PayloadKeys<T>, EventFieldClass> };

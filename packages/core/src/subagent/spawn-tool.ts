@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import {
   Code,
+  HarnessError,
   JsonValue,
   type Code as CodeType,
   type JsonValue as JsonValueType,
@@ -15,6 +16,7 @@ import type {
 } from "../ports.js";
 import type { RoleRegistry } from "../roles.js";
 import { z } from "zod";
+import type { SubagentResult } from "./result.js";
 import type { SubagentSupervisor } from "./supervisor.js";
 
 /** Strict model input for the built-in `agent.spawn` tool. */
@@ -27,6 +29,12 @@ export const AgentSpawnInputSchema = z
   .strict();
 
 const AGENT_SPAWN_ID: CodeType = "agent.spawn";
+const SPAWN_ERROR_CODES = new Set<CodeType>([
+  "budget_exceeded",
+  "subagent_children_limit",
+  "subagent_depth_limit",
+  "subagent_limit",
+]);
 const AGENT_SPAWN_SPEC = {
   toolId: AGENT_SPAWN_ID,
   description: "Run an isolated child agent with the selected role.",
@@ -84,13 +92,24 @@ export class AgentSpawnTool implements ToolPort {
       return { outcome: "error", errorCode: "agent_spawn_invalid", result: null };
     }
     const role = this.roles.resolveRole(parsed.data.role);
-    const result = await this.supervisor.spawn({
-      role,
-      goal: parsed.data.goal,
-      ...(parsed.data.inputs === undefined ? {} : { inputs: parsed.data.inputs }),
-      call,
-      context,
-    });
+    let result: SubagentResult;
+    try {
+      result = await this.supervisor.spawn({
+        role,
+        goal: parsed.data.goal,
+        ...(parsed.data.inputs === undefined ? {} : { inputs: parsed.data.inputs }),
+        call,
+        context,
+      });
+    } catch (error) {
+      if (error instanceof HarnessError && SPAWN_ERROR_CODES.has(error.code)) {
+        const errorCode = Code.safeParse(error.code);
+        if (errorCode.success) {
+          return { outcome: "error", errorCode: errorCode.data, result: null };
+        }
+      }
+      throw error;
+    }
     if (result.status === "failed" || result.status === "cancelled") {
       const errorCode = Code.safeParse(result.errorCode);
       return {

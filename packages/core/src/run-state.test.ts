@@ -272,6 +272,34 @@ describe("foldRunState", () => {
     expect(state.lastTs).toBe(5);
   });
 
+  test("adds completed child usage and steps once, treating omitted child fields as zero", () => {
+    const completed = (
+      seq: number,
+      inputTokens: number,
+      outputTokens: number,
+      steps: number,
+      costMicros?: number,
+    ) => ({
+      ...envelope(seq),
+      type: "subagent_completed" as const,
+      childRunId: otherRunId,
+      outcome: "completed" as const,
+      inputTokens,
+      outputTokens,
+      steps,
+      ...(costMicros === undefined ? {} : { costMicros }),
+    });
+    const state = foldRunState([
+      runCreated(0),
+      modelResponse(1, 2),
+      completed(2, 3, 4, 2, 5),
+      completed(3, 7, 8, 3),
+    ]);
+
+    expect(state.usage).toEqual({ inputTokens: 13, outputTokens: 17, costMicros: 7 });
+    expect(state.steps).toBe(6);
+  });
+
   test("accumulates reported costs and suspension time across a resumed segment", () => {
     const state = foldRunState([
       runCreated(0, 100),

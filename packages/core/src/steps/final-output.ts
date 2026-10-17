@@ -18,6 +18,7 @@ export async function runStructuredFinalOutput(
     budgetTracker: execution.budgetTracker,
     checkpointer: execution.checkpointer,
     events,
+    budgets: options.budgets,
     now: options.clock.now(),
     recorder: options.recorder,
   });

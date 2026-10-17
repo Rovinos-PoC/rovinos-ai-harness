@@ -6,6 +6,7 @@ const SubagentUsageSchema = z
   .object({
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
+    steps: z.number().int().nonnegative().optional(),
     costMicros: z.number().int().nonnegative().optional(),
   })
   .strict();
@@ -33,16 +34,19 @@ export type SubagentResult = z.infer<typeof SubagentResultSchema>;
 export function aggregateSubagentUsage(events: readonly Event[]): {
   readonly inputTokens: number;
   readonly outputTokens: number;
+  readonly steps: number;
   readonly costMicros?: number;
 } {
   let inputTokens = 0;
   let outputTokens = 0;
+  let steps = 0;
   let costMicros = 0;
   let hasCost = false;
   for (const event of events) {
     if (event.type === "model_response" || event.type === "subagent_completed") {
       inputTokens += event.inputTokens;
       outputTokens += event.outputTokens;
+      steps += event.type === "model_response" ? 1 : (event.steps ?? 0);
       if (event.costMicros !== undefined) {
         costMicros += event.costMicros;
         hasCost = true;
@@ -52,6 +56,7 @@ export function aggregateSubagentUsage(events: readonly Event[]): {
   return {
     inputTokens,
     outputTokens,
+    steps,
     ...(hasCost ? { costMicros } : {}),
   };
 }

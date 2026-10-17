@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import type { Event } from "@harness/schemas";
-import type { BudgetTracker, BudgetViolation } from "../budgets.js";
+import type { Event, RunConfig } from "@harness/schemas";
+import { accountForOpenChildren, type BudgetTracker, type BudgetViolation } from "../budgets.js";
 import type { Checkpointer } from "../checkpoint.js";
 import type { RunRecorder } from "../recorder.js";
 import { foldRunState } from "../run-state.js";
@@ -53,12 +53,17 @@ export async function preflightModelBudget(options: {
   readonly budgetTracker: BudgetTracker;
   readonly checkpointer: Checkpointer;
   readonly events: Event[];
+  readonly budgets: RunConfig["budgets"];
   readonly now: number;
   readonly recorder: RunRecorder;
 }): Promise<ModelPreflightResult> {
   const state = foldRunState(options.events);
   const deadlineTs = options.budgetTracker.deadlineTs(state);
-  const budget = options.budgetTracker.check({ ...state, steps: state.steps + 1 }, options.now);
+  const accounted = accountForOpenChildren(state, options.events, options.budgets);
+  const budget = options.budgetTracker.check(
+    { ...accounted, steps: accounted.steps + 1 },
+    options.now,
+  );
   if (budget.ok) {
     return { deadlineTs };
   }

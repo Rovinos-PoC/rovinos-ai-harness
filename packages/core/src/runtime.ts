@@ -23,6 +23,7 @@ import type { RunScopeRegistry } from "./subagent/scope.js";
 import { createSubagentTool } from "./subagent/runtime.js";
 import {
   createRuntimeContinuation,
+  readChildBudgetAllocation,
   readStoredGoal,
   startRun,
   type RunControl,
@@ -358,6 +359,7 @@ function createRuntimeResume(
   const { config, clock, ids, store, model, context, policy, scopes } = options;
   return async (runId, resumeOptions: RuntimeResumeOptions = {}) => {
     const firstNewSeq = await store.head(runId);
+    const childAllocation = await readChildBudgetAllocation(store, runId);
     return runWithControl(
       runId,
       async (signal) => {
@@ -382,7 +384,8 @@ function createRuntimeResume(
             context,
             signal: composed.signal,
             scopes,
-            budgets: config.run.budgets,
+            budgets: childAllocation?.budgets ?? config.run.budgets,
+            ...(childAllocation === undefined ? {} : { deadlineTs: childAllocation.deadlineTs }),
             checkpointEveryEvents: config.run.checkpointEveryEvents,
             ...(config.store?.snapshotKeep === undefined
               ? {}

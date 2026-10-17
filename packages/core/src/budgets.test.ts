@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { RunConfigSchema, type Event } from "@harness/schemas";
 import { describe, expect, it } from "vitest";
-import { BudgetTracker } from "./budgets.js";
+import { accountForOpenChildren, BudgetTracker } from "./budgets.js";
 import { foldRunState, type RunState } from "./run-state.js";
 
 const runId = "00000000000000000000000000";
@@ -188,5 +188,65 @@ describe("BudgetTracker", () => {
     expect(
       new BudgetTracker(configuredBudgets({ maxWallClockMs: 25 })).check(state, 431),
     ).toMatchObject({ ok: false, budget: "wall_clock", observed: 31 });
+  });
+
+  it("reserves open child allocations in the parent's execution budget", () => {
+    const state = runState({
+      steps: 1,
+      usage: { inputTokens: 0, outputTokens: 0, costMicros: 2 },
+    });
+    const openChild: Event = {
+      ...eventEnvelope(2, 110, firstSegmentId),
+      type: "subagent_spawned",
+      childRunId: "33333333333333333333333333",
+      parentCallId: "44444444444444444444444444",
+      role: "worker",
+      budgetLimits: configuredBudgets({ maxSteps: 3, maxCostUsd: 0.000003 }),
+      budgetDeadlineTs: 500,
+    };
+    const completedChild: Event = {
+      ...eventEnvelope(3, 120, firstSegmentId),
+      type: "subagent_spawned",
+      childRunId: "55555555555555555555555555",
+      parentCallId: "66666666666666666666666666",
+      role: "worker",
+      budgetLimits: configuredBudgets({ maxSteps: 2, maxCostUsd: 0.000004 }),
+      budgetDeadlineTs: 500,
+    };
+    const history: Event[] = [
+      openChild,
+      completedChild,
+      {
+        ...eventEnvelope(4, 130, firstSegmentId),
+        type: "subagent_completed",
+        childRunId: completedChild.childRunId,
+        outcome: "completed",
+        inputTokens: 0,
+        outputTokens: 0,
+        steps: 2,
+        costMicros: 4,
+      },
+    ];
+
+    const accounted = accountForOpenChildren(
+      state,
+      history,
+      configuredBudgets({ maxSteps: 4, maxCostUsd: 0.000005 }),
+    );
+
+    expect(accounted.steps).toBe(4);
+    expect(accounted.usage.costMicros).toBe(5);
+    expect(
+      new BudgetTracker(configuredBudgets({ maxSteps: 4, maxCostUsd: 0.000005 })).check(
+        accounted,
+        110,
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      new BudgetTracker(configuredBudgets({ maxSteps: 4 })).check(
+        { ...accounted, steps: accounted.steps + 1 },
+        110,
+      ),
+    ).toMatchObject({ ok: false, budget: "steps", observed: 5 });
   });
 });

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { z } from "zod";
+import { RunBudgetsSchema } from "./config/run.js";
 import { JsonPointerSchema } from "./config/pii.js";
 import { JsonValue } from "./json.js";
 import { MessageSchema, PartSchema } from "./messages.js";
@@ -232,6 +233,8 @@ const subagentSpawnedEvent = z
     childRunId: Id,
     role: Code,
     parentCallId: Id.optional(),
+    budgetLimits: RunBudgetsSchema.optional(),
+    budgetDeadlineTs: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -243,6 +246,7 @@ const subagentCompletedEvent = z
     outcome: z.enum(["completed", "failed", "cancelled"]),
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
+    steps: z.number().int().nonnegative().optional(),
     costMicros: z.number().int().nonnegative().optional(),
   })
   .strict();

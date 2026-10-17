@@ -88,7 +88,7 @@ describe("finalizeChild", () => {
       childRunId,
       status: "completed",
       value: { email: "<EMAIL_1>" },
-      usage: { inputTokens: 7, outputTokens: 10, costMicros: 15 },
+      usage: { inputTokens: 7, outputTokens: 10, steps: 2, costMicros: 15 },
     });
     expect(JSON.stringify(result)).not.toContain("alice@example.test");
   });
@@ -105,7 +105,7 @@ describe("finalizeChild", () => {
       childRunId,
       status: "completed",
       value: { text: "plain answer" },
-      usage: { inputTokens: 1, outputTokens: 2 },
+      usage: { inputTokens: 1, outputTokens: 2, steps: 1 },
     });
   });
 
@@ -169,6 +169,7 @@ describe("finalizeChild", () => {
       outcome: "completed",
       inputTokens: 7,
       outputTokens: 8,
+      steps: 2,
       costMicros: 9,
     });
     const invalid = response(
@@ -187,7 +188,7 @@ describe("finalizeChild", () => {
       }),
     ).toMatchObject({
       status: "failed",
-      usage: { inputTokens: 9, outputTokens: 11, costMicros: 13 },
+      usage: { inputTokens: 9, outputTokens: 11, steps: 3, costMicros: 13 },
     });
   });
 
@@ -200,6 +201,7 @@ describe("finalizeChild", () => {
       outcome: "completed",
       inputTokens: 7,
       outputTokens: 8,
+      steps: 2,
       costMicros: 9,
     });
     const childResult = finalizeChild({
@@ -229,6 +231,7 @@ describe("finalizeChild", () => {
     expect(childResult.usage).toEqual({
       inputTokens: 9,
       outputTokens: 11,
+      steps: 3,
       costMicros: 13,
     });
     expect(rootResult.usage).toEqual(childResult.usage);
@@ -265,7 +268,7 @@ describe("finalizeChild", () => {
       childRunId,
       status: "cancelled",
       errorCode: "run_cancelled",
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: { inputTokens: 0, outputTokens: 0, steps: 0 },
     });
   });
 });
