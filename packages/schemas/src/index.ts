@@ -145,9 +145,11 @@ export {
   JsonPointerSchema,
   PiiConfigSchema,
   PiiDetokenizeRuleSchema,
+  PiiPresidioConfigSchema,
   type JsonPointer,
   type PiiConfig,
   type PiiDetokenizeRule,
+  type PiiPresidioConfig,
 } from "./config/pii.js";
 export {
   CustomDetectorSchema,

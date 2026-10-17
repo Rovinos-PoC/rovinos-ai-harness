@@ -8,6 +8,40 @@ describe("JSON Pointer and PII detokenization config", () => {
     expect(PiiConfigSchema.parse({ enabled: false }).enabled).toBe(false);
   });
 
+  it("defaults to fail-closed detection and validates optional Presidio settings", () => {
+    expect(PiiConfigSchema.parse({}).failMode).toBe("closed");
+    expect(PiiConfigSchema.parse({ failMode: "regex_only" }).failMode).toBe("regex_only");
+    expect(
+      PiiConfigSchema.parse({ presidio: { baseUrl: "http://presidio-analyzer:3000" } }).presidio,
+    ).toEqual({
+      baseUrl: "http://presidio-analyzer:3000",
+      language: "en",
+      scoreThreshold: 0.5,
+    });
+    expect(
+      PiiConfigSchema.safeParse({
+        presidio: { baseUrl: "https://example.test?token=synthetic" },
+      }).success,
+    ).toBe(false);
+    expect(PiiConfigSchema.safeParse({ presidio: { baseUrl: "http://example.com" } }).success).toBe(
+      false,
+    );
+    expect(
+      PiiConfigSchema.safeParse({ presidio: { baseUrl: "http://127.0.0.1:3000" } }).success,
+    ).toBe(true);
+    expect(
+      PiiConfigSchema.safeParse({ presidio: { baseUrl: "https://example.com" } }).success,
+    ).toBe(true);
+    expect(
+      PiiConfigSchema.safeParse({
+        presidio: { baseUrl: "******example.test" },
+      }).success,
+    ).toBe(false);
+    expect(
+      PiiConfigSchema.safeParse({ presidio: { baseUrl: "file:///tmp/analyzer" } }).success,
+    ).toBe(false);
+  });
+
   it.each(["", "/to", "/attachments/0/name", "/a~1b", "/a~0b", "/recipients/*"])(
     "accepts pointer %s",
     (pointer) => {

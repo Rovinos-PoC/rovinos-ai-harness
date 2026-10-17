@@ -12,11 +12,21 @@ export interface Detector {
   detect(text: string): Detection[];
 }
 
+/** Asynchronous detector plugin; use for external analyzers without blocking regex detectors. */
+export interface AsyncDetector {
+  readonly id: Code;
+  readonly entityTypes: Code[];
+  detect(text: string): Promise<Detection[]>;
+}
+
 /** Failure codes never include input text or configured patterns. */
 export class PiiDetectorError extends HarnessError {
   constructor(
     public readonly code:
-      "pii_pattern_unsafe" | "pii_pattern_invalid" | "pii_detector_invalid_input",
+      | "pii_pattern_unsafe"
+      | "pii_pattern_invalid"
+      | "pii_detector_invalid_input"
+      | "pii_detector_unavailable",
   ) {
     super(code);
   }

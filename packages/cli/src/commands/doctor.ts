@@ -12,6 +12,7 @@ import {
   OAuthTokenStore,
   type McpConnectionDependencies,
 } from "@harness/mcp";
+import { createPresidioReachableCheck } from "@harness/pii";
 import {
   Code,
   DoctorResultsSchema,
@@ -202,6 +203,9 @@ function defaultDoctorChecks(
   return [
     ...core.doctorChecks(),
     keysConfiguredCheck(config, env),
+    ...(config?.pii.presidio === undefined
+      ? []
+      : [createPresidioReachableCheck(config.pii.presidio)]),
     createServersAuthorizedCheck(servers, dependencies),
     ...createServersReachableChecks(servers, dependencies),
   ];
@@ -246,10 +250,8 @@ async function runDoctor(
   const resources = await openOAuthResources(config, secretResolver, env, doctorContext.dataDir);
   try {
     const dependencies = createMcpDependencies(secretResolver, env, resources.store);
-    const results = await core.runDoctor(
-      doctorContext,
-      checks ?? defaultDoctorChecks(core, config, env, dependencies),
-    );
+    const defaultChecks = defaultDoctorChecks(core, config, env, dependencies);
+    const results = await core.runDoctor(doctorContext, checks ?? defaultChecks);
     printDoctorResults(program, context, results);
     if (results.some(({ status }) => status === "fail")) {
       throw new DoctorChecksFailedError();

@@ -4,6 +4,7 @@ import { SpanId, TraceId, type Code, type PiiConfig } from "@harness/schemas";
 import {
   creditCardDetector,
   createCustomDetector,
+  DetectorRegistry,
   emailDetector,
   ibanDetector,
   ipDetector,
@@ -11,8 +12,8 @@ import {
   secretsDetector,
   Tokenizer,
   urlCredentialsDetector,
+  PresidioDetector,
   PiiMessageSanitizer,
-  type PiiDetectorRegistry,
   type Detector,
 } from "@harness/pii";
 import {
@@ -65,9 +66,12 @@ export function createRuntimePii({
     ...builtInDetectors,
     ...(config.custom ?? []).map((detector) => createCustomDetector(detector)),
   ];
-  const detectorRegistry: PiiDetectorRegistry = {
-    detect: (text) => detectors.flatMap((detector) => detector.detect(text)),
-  };
+  const detectorRegistry = new DetectorRegistry({
+    syncDetectors: detectors,
+    asyncDetectors:
+      config.presidio === undefined ? [] : [new PresidioDetector(config.presidio, { clock })],
+    failMode: config.failMode,
+  });
   const tokenizer = new Tokenizer({
     detectors: detectorRegistry,
     policy: config,

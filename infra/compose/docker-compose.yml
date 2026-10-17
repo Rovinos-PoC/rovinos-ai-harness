@@ -25,6 +25,29 @@ services:
     networks:
       - internal
       - sandbox
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/health', timeout=2).read()"
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 10
+    networks:
+      - internal
   sandbox-runner:
     build:
       context: ../..

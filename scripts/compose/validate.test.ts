@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 import { RunConfigSchema } from "@harness/schemas";
-import { evaluateComposeSecurity } from "./validate.js";
+import { evaluateComposeSecurity, validateComposeProfiles } from "./validate.js";
 
 function service(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -68,6 +68,26 @@ describe("compose security evaluator", () => {
       evaluateComposeSecurity(config({ harness: service({ networks: ["egress"] }) }), "dev"),
     ).toContain("harness: external_network");
   });
+
+  it.each(["dev", "test", "prod-like"] as const)(
+    "rejects a published Presidio port in the %s profile",
+    (profile) => {
+      expect(
+        evaluateComposeSecurity(
+          config({ "presidio-analyzer": service({ ports: ["3000:3000"] }) }),
+          profile,
+        ),
+      ).toContain("presidio-analyzer: published_ports");
+    },
+  );
+
+  it("rejects published Presidio ports in every rendered Compose profile", () => {
+    expect(
+      validateComposeProfiles().filter((violation) =>
+        violation.endsWith("presidio-analyzer: published_ports"),
+      ),
+    ).toEqual([]);
+  }, 20_000);
 
   it("permits the collector and the test-only published database network", () => {
     expect(

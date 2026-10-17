@@ -27,6 +27,8 @@ import { createRuntimeVault } from "./runtime-vault.js";
 import type { RuntimeConfig } from "./runtime-config.js";
 import { FakeModelPort } from "./testing/fake-model.js";
 import { allowAllPolicy } from "./testing/allow-policy.js";
+import { createRuntimePii } from "./runtime-pii.js";
+import { RunScopeRegistry } from "./subagent/scope.js";
 import { z } from "zod";
 
 const email = "runtime-canary@example.test";
@@ -98,6 +100,39 @@ afterEach(async () => {
 });
 
 describe("createRuntime PII composition", () => {
+  it("preserves overlapping runtime detections until policy evaluation", async () => {
+    const input = `prefix ${email} suffix`;
+    const pii = PiiConfigSchema.parse({
+      custom: [{ name: "org_id", pattern: "prefix runtime-canary@example\\.test suffix" }],
+      rules: [
+        {
+          entities: ["custom_org_id"],
+          boundaries: ["tool_input"],
+          destinations: ["local"],
+          action: "allow",
+        },
+      ],
+    });
+    const runId = Id.parse("C".repeat(26));
+    const scopes = new RunScopeRegistry();
+    const { tokenizer } = createRuntimePii({
+      config: pii,
+      vault: new InMemoryVault(),
+      scopes,
+      scopeOf: scopes.scopeOf,
+      policyVersion: Code.parse("test.policy"),
+      clock: { now: () => 0 },
+    });
+
+    const result = await tokenizer.tokenizeText(runId, input, {
+      boundary: "tool_input",
+      destination: "local",
+    });
+
+    expect(result.text).toBe("<EMAIL_1>");
+    expect(result.text).not.toContain(email);
+  });
+
   it("re-sanitizes local-allow messages before hosted fallback and records summaries", async () => {
     const localRequests: ModelRequest[] = [];
     const hostedRequests: ModelRequest[] = [];

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   EventSchema,
+  PiiPresidioConfigSchema,
   PiiActionSummarySchema,
   PiiPolicySchema,
   type Detection,
@@ -9,7 +10,15 @@ import {
   type PiiAction,
 } from "@harness/schemas";
 import { InMemoryVault, type VaultWriter } from "@harness/vault";
-import { PiiBlockedError, PiiTokenizerError, toPiiActionEvent, Tokenizer } from "./index.js";
+import { PresidioDetector } from "./detectors/presidio.js";
+import { DetectorRegistry } from "./detectors/registry.js";
+import {
+  PiiBlockedError,
+  PiiDetectorError,
+  PiiTokenizerError,
+  toPiiActionEvent,
+  Tokenizer,
+} from "./index.js";
 import type { PiiDetectorRegistry } from "./tokenizer.js";
 
 const runA = "A".repeat(26);
@@ -206,6 +215,73 @@ describe("Tokenizer.tokenizeText", () => {
     ]);
   });
 
+  it("surfaces a closed-breaker Presidio failure through tokenizeText without output or events", async () => {
+    const rawText = "tokenizer-presidio-sensitive-value";
+    const fetcher = vi.fn(() => Promise.reject(new Error(rawText)));
+    const detector = new PresidioDetector(
+      PiiPresidioConfigSchema.parse({ baseUrl: "http://presidio:3000" }),
+      { clock: { now: () => 0 }, fetcher },
+    );
+    const tokenizer = new Tokenizer({
+      detectors: new DetectorRegistry({ asyncDetectors: [detector] }),
+      policy: PiiPolicySchema.parse({ defaultAction: "tokenize" }),
+      vault: new InMemoryVault(),
+    });
+    const recordedEvents: unknown[] = [];
+    let output: string | undefined;
+    const failure = await tokenizer
+      .tokenizeText(runA, rawText, context)
+      .then((result) => {
+        output = result.text;
+        recordedEvents.push(...result.actions.map(toPiiActionEvent));
+        return undefined;
+      })
+      .catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "pii_detector_unavailable" });
+    expect(String(failure)).not.toContain(rawText);
+    expect(JSON.stringify(failure)).not.toContain(rawText);
+    expect(output).toBeUndefined();
+    expect(recordedEvents).toEqual([]);
+    expect(JSON.stringify(recordedEvents)).not.toContain(rawText);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each(["open", "half-open"] as const)(
+    "fails tokenization without exposing raw text when Presidio fails in the %s breaker state",
+    async (breakerState) => {
+      let now = 0;
+      const rawText = "tokenizer-presidio-sensitive-value";
+      const fetcher = vi.fn(() => Promise.reject(new Error(rawText)));
+      const detector = new PresidioDetector(
+        PiiPresidioConfigSchema.parse({ baseUrl: "http://presidio:3000" }),
+        { clock: { now: () => now }, fetcher },
+      );
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(detector.detect(rawText)).rejects.toMatchObject({
+          code: "pii_detector_unavailable",
+        });
+      }
+      if (breakerState === "half-open") {
+        now += 30_000;
+      }
+      const tokenizer = new Tokenizer({
+        detectors: new DetectorRegistry({ asyncDetectors: [detector] }),
+        policy: PiiPolicySchema.parse({ defaultAction: "tokenize" }),
+        vault: new InMemoryVault(),
+      });
+
+      const failure = await tokenizer
+        .tokenizeText(runA, rawText, context)
+        .catch((error: unknown) => error);
+
+      expect(failure).toMatchObject({ code: "pii_detector_unavailable" });
+      expect(String(failure)).not.toContain(rawText);
+      expect(JSON.stringify(failure)).not.toContain(rawText);
+      expect(fetcher).toHaveBeenCalledTimes(breakerState === "half-open" ? 6 : 5);
+    },
+  );
+
   it("exports a converter that produces a valid pii_action event payload", () => {
     const summary = PiiActionSummarySchema.parse({
       boundary: "model_input",
@@ -267,6 +343,18 @@ describe("Tokenizer.tokenizeText", () => {
     ).rejects.toMatchObject({
       code: "pii_vault_failed",
       message: "pii_vault_failed",
+    });
+  });
+
+  it("preserves the safe unavailable code from the async detector registry", async () => {
+    const sensitiveValue = "synthetic-detector-canary";
+    const tokenizer = createTokenizer("tokenize", new InMemoryVault(), () =>
+      Promise.reject(new PiiDetectorError("pii_detector_unavailable")),
+    );
+
+    await expect(tokenizer.tokenizeText(runA, sensitiveValue, context)).rejects.toMatchObject({
+      code: "pii_detector_unavailable",
+      message: "pii_detector_unavailable",
     });
   });
 

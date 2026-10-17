@@ -12,6 +12,7 @@ import {
   countModelUsage,
   countMcpDiscoveryFailed,
   countPiiBlobHit,
+  countPiiDetectorDegraded,
   countPolicyDecision,
   countDroppedTelemetry,
   countSentinelScopeReduced,
@@ -110,6 +111,14 @@ describe("countDroppedTelemetry", () => {
     expect(createCounter).toHaveBeenCalledWith("harness.pii.blob_hit");
     expect(add).toHaveBeenCalledWith(1);
     expectAddCallsAreAllowlisted("harness.pii.blob_hit");
+  });
+
+  it("counts degraded PII detection without attributes", () => {
+    countPiiDetectorDegraded();
+
+    expect(createCounter).toHaveBeenCalledWith("harness.pii.detector_degraded");
+    expect(add).toHaveBeenCalledWith(1);
+    expectAddCallsAreAllowlisted("harness.pii.detector_degraded");
   });
 
   it("counts accepted app spans without attributes", () => {

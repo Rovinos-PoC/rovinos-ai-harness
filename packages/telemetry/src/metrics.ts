@@ -74,6 +74,7 @@ export const METRIC_ALLOWLIST = {
   "harness.model.cost_micros": ["harness.model.provider", "harness.model.name"],
   "harness.policy.decisions": ["harness.policy.decision"],
   "harness.pii.blob_hit": [],
+  "harness.pii.detector_degraded": [],
   "harness.sentinel.scope_reduced": [],
   "harness.sentinel.short_values_skipped": [],
   "harness.telemetry.dropped": ["harness.telemetry.dropped.reason"],
@@ -84,6 +85,7 @@ let droppedCounter: Counter<TelemetryDropAttributes> | undefined;
 let hostAppRejectedCounter: Counter<HostAppRejectedAttributes> | undefined;
 let policyDecisionsCounter: Counter<PolicyDecisionAttributes> | undefined;
 let piiBlobHitCounter: Counter<NoMetricAttributes> | undefined;
+let piiDetectorDegradedCounter: Counter<NoMetricAttributes> | undefined;
 let hostAppSpansAcceptedCounter: Counter<NoMetricAttributes> | undefined;
 let skippedShortValuesCounter: Counter<NoMetricAttributes> | undefined;
 let scopeReducedCounter: Counter<NoMetricAttributes> | undefined;
@@ -129,6 +131,14 @@ function getPiiBlobHitCounter(): Counter<NoMetricAttributes> {
     meter.createCounter<NoMetricAttributes>(name),
   );
   return piiBlobHitCounter;
+}
+
+function getPiiDetectorDegradedCounter(): Counter<NoMetricAttributes> {
+  piiDetectorDegradedCounter ??= createCounter<NoMetricAttributes>(
+    "harness.pii.detector_degraded",
+    (meter, name) => meter.createCounter<NoMetricAttributes>(name),
+  );
+  return piiDetectorDegradedCounter;
 }
 
 function getHostAppSpansAcceptedCounter(): Counter<NoMetricAttributes> {
@@ -226,6 +236,15 @@ export function countPolicyDecision(decision: PolicyDecision): void {
 export function countPiiBlobHit(): void {
   try {
     getPiiBlobHitCounter().add(1);
+  } catch {
+    return;
+  }
+}
+
+/** Counts one PII detection run that continued without its configured async detector. */
+export function countPiiDetectorDegraded(): void {
+  try {
+    getPiiDetectorDegradedCounter().add(1);
   } catch {
     return;
   }

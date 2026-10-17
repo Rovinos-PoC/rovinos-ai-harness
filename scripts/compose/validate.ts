@@ -214,6 +214,9 @@ function serviceViolations(
   externallyReachableNetworks: ReadonlySet<string>,
 ): string[] {
   const violations: string[] = [];
+  if (name === "presidio-analyzer" && Array.isArray(service.ports) && service.ports.length > 0) {
+    violations.push(`${name}: published_ports`);
+  }
   if (service.privileged === true) {
     violations.push(`${name}: privileged`);
   }

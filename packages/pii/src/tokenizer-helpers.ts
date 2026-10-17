@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { DetectionSchema, type Detection, type PiiAction } from "@harness/schemas";
+import { PiiDetectorError } from "./detectors/types.js";
 import { findTokens } from "@harness/vault";
 import { PiiTokenizerError } from "./errors.js";
 
@@ -35,7 +36,10 @@ export async function detectOutsideTokenSpans(
   let found: readonly Detection[];
   try {
     found = await detect(maskedText);
-  } catch {
+  } catch (error) {
+    if (error instanceof PiiDetectorError && error.code === "pii_detector_unavailable") {
+      throw new PiiTokenizerError("pii_detector_unavailable");
+    }
     throw new PiiTokenizerError("pii_detector_failed");
   }
 

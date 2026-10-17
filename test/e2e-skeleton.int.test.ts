@@ -1138,6 +1138,95 @@ describe("MCP runtime", () => {
       await rm(directory, { recursive: true, force: true });
     }
   }, 15_000);
+
+  it("uses the configured async detector before tokenizing through the runtime", async () => {
+    const current = fixture();
+    const directory = await mkdtemp(join(tmpdir(), "harness-presidio-runtime-"));
+    const canary = "Alice Smith";
+    const requestBodies: string[] = [];
+    const server = createServer((request, response) => {
+      const chunks: Uint8Array[] = [];
+      request.on("data", (chunk: Uint8Array) => chunks.push(chunk));
+      request.on("end", () => {
+        const body = Buffer.concat(chunks).toString("utf8");
+        requestBodies.push(body);
+        response
+          .writeHead(200, { "content-type": "application/json" })
+          .end(
+            JSON.stringify(
+              body.includes(canary)
+                ? [{ entity_type: "PERSON", start: 0, end: 11, score: 0.99 }]
+                : [],
+            ),
+          );
+      });
+    });
+    let listening = false;
+    let runtime: Awaited<ReturnType<typeof createRuntime>> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      listening = true;
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        throw new Error("The Presidio fixture did not bind a TCP port.");
+      }
+      runtime = await createRuntime(
+        {
+          run: RunConfigSchema.parse({}),
+          pii: PiiConfigSchema.parse({
+            presidio: { baseUrl: `http://127.0.0.1:${String(address.port)}` },
+          }),
+        },
+        {
+          dataDir: directory,
+          store: new InMemoryEventStore(),
+          transientVault: true,
+          clock: current.clock,
+          ids: current.ids,
+        },
+      );
+      const run = runtime.start({});
+      await run.started;
+      void run.completion.catch(() => undefined);
+      const sanitized = await runtime.tokenizeAppContent(
+        run.runId,
+        { message: canary },
+        { boundary: "model_input" },
+      );
+
+      expect(JSON.stringify(sanitized)).toContain("<PERSON_NAME_1>");
+      expect(JSON.stringify(sanitized)).not.toContain(canary);
+      const requestBody = parseJson(
+        z
+          .object({
+            text: z.string(),
+            language: z.string(),
+            score_threshold: z.number(),
+          })
+          .strict(),
+        requestBodies.find((body) => body.includes(canary)) ?? "",
+      );
+      expect(requestBody).toEqual({ text: canary, language: "en", score_threshold: 0.5 });
+      expect(Object.keys(requestBody)).toEqual(["text", "language", "score_threshold"]);
+    } finally {
+      await runtime?.close();
+      if (listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error === undefined) {
+              resolve();
+            } else {
+              reject(error);
+            }
+          });
+        });
+      }
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("approval", () => {

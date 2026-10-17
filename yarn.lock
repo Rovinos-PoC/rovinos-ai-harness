@@ -1344,6 +1344,7 @@ __metadata:
     "@harness/schemas": "workspace:^"
     "@harness/telemetry": "workspace:^"
     "@harness/vault": "workspace:^"
+    undici: "npm:8.11.2"
     vitest: "npm:3.2.6"
     zod: "npm:4.6.5"
   languageName: unknown

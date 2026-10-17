@@ -32,6 +32,13 @@ services:
     stop_signal: SIGTERM
     cpus: 1
     mem_limit: 512m
+  presidio-analyzer:
+    profiles: [prod-like]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
+    cpus: 2
+    mem_limit: 2g
 volumes:
   harness-event-store: {}
   harness-vault: {}

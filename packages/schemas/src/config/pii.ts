@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-// PII configuration is owned by tasks 13.1, 13.2, and 13.5.
+// PII configuration is owned by tasks 13.1, 13.2, 13.3, and 13.5.
 import { z } from "zod";
 import { CustomDetectorSchema } from "../pii-detection.js";
 import { PiiPolicySchema } from "../pii-policy.js";
@@ -36,9 +36,59 @@ export const PiiDetokenizeRuleSchema = z
 /** Inferred detokenization allowlist entry. */
 export type PiiDetokenizeRule = z.infer<typeof PiiDetokenizeRuleSchema>;
 
+/** Optional analyzer sidecar connection and detection settings. */
+export const PiiPresidioConfigSchema = z
+  .object({
+    baseUrl: z.url().refine((value) => {
+      try {
+        const url = new URL(value);
+        const hostname = url.hostname.toLowerCase();
+        return (
+          (url.protocol === "https:" ||
+            (url.protocol === "http:" && isLoopbackHostname(hostname)) ||
+            (url.protocol === "http:" && isSingleLabelHostname(hostname))) &&
+          url.username === "" &&
+          url.password === "" &&
+          url.search === "" &&
+          url.hash === ""
+        );
+      } catch {
+        return false;
+      }
+    }),
+    language: z.string().min(2).max(35).default("en"),
+    scoreThreshold: z.number().min(0).max(1).default(0.5),
+  })
+  .strict();
+
+function isLoopbackHostname(hostname: string): boolean {
+  if (hostname === "localhost" || hostname === "[::1]") {
+    return true;
+  }
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
+  );
+}
+
+function isSingleLabelHostname(hostname: string): boolean {
+  return (
+    hostname.length <= 63 &&
+    !hostname.includes(".") &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(hostname)
+  );
+}
+
+/** Validated optional Presidio sidecar configuration. */
+export type PiiPresidioConfig = z.infer<typeof PiiPresidioConfigSchema>;
+
 export const PiiConfigSchema = PiiPolicySchema.safeExtend({
   enabled: z.boolean().default(true),
   custom: z.array(CustomDetectorSchema).optional(),
+  failMode: z.enum(["closed", "regex_only"]).default("closed"),
+  presidio: PiiPresidioConfigSchema.optional(),
   detokenize: z
     .array(PiiDetokenizeRuleSchema)
     .superRefine((rules, context) => {

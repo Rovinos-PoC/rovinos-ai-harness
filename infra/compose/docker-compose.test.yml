@@ -10,6 +10,10 @@ services:
     extends:
       file: docker-compose.yml
       service: otel-collector
+  presidio-analyzer:
+    extends:
+      file: docker-compose.yml
+      service: presidio-analyzer
   sandbox-runner:
     extends:
       file: docker-compose.yml

@@ -8,6 +8,7 @@ type PiiTokenizerErrorCode =
   | "pii_input_invalid"
   | "pii_key_contains_pii"
   | "pii_detector_failed"
+  | "pii_detector_unavailable"
   | "pii_detector_invalid_output"
   | "pii_vault_failed";
 

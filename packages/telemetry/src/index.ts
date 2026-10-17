@@ -29,6 +29,7 @@ export {
   countModelUsage,
   countMcpDiscoveryFailed,
   countPiiBlobHit,
+  countPiiDetectorDegraded,
   countPolicyDecision,
   METRIC_ALLOWLIST,
   type HostAppRejectedReason,

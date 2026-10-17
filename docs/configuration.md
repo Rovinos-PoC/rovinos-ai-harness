@@ -45,6 +45,25 @@ Set `HARNESS_CASSETTE_AUTO=0` to disable cassette auto mode. Record and auto mod
 
 Store, model, server, policy, PII, telemetry, and sandbox fragments are strict schemas owned by their respective packages. `telemetry.sentinel.minValueLength` defaults to `6` and controls the minimum length of vault values included in leak-sentinel scans; shorter values are counted and skipped. The sentinel is enabled by default; `telemetry.sentinel.enabled: false` is accepted only outside production. Configuration should contain secret references rather than secret values; secret resolution is covered by task 20.3.
 
+The Presidio analyzer is optional and is enabled by configuring `pii.presidio`. Its base URL,
+language, and score threshold control the sidecar request; the default language is `en` and the
+default threshold is `0.5`. Use `https:` for remote analyzers; `http:` is restricted to loopback
+addresses and single-label internal Compose hostnames. Redirects are rejected so request text is
+never forwarded to a host other than the configured analyzer. `pii.failMode` defaults to `closed`, so an unavailable
+configured analyzer fails PII detection rather than passing its input through. Set it to
+`regex_only` to continue with synchronous detectors during an analyzer outage; this degraded
+operation increments `harness.pii.detector_degraded`. Presidio supplements the built-in detectors
+and does not guarantee that every sensitive value will be detected.
+
+```yaml
+pii:
+  failMode: closed
+  presidio:
+    baseUrl: http://presidio-analyzer:3000
+    language: en
+    scoreThreshold: 0.5
+```
+
 The `store.dialect` is `sqlite` by default; select `postgres` and provide `store.connectionString` as a secret reference for the runtime and the store-management commands (both use the same configured store):
 
 ```yaml

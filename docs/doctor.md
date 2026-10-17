@@ -1,8 +1,10 @@
 # Environment diagnostics
 
 `harness doctor` checks the local Node.js version, loaded configuration, configured secret
-references, and data-directory write access. Checks run sequentially with a five-second timeout
-each. A failed check produces exit code `1`; warnings do not change the successful exit code.
+references, and data-directory write access. When `pii.presidio` is configured, it also checks the
+analyzer's `/health` endpoint and reports `presidio_reachable` or `presidio_unreachable`. Checks
+run sequentially with a five-second timeout each. A failed check produces exit code `1`; warnings
+do not change the successful exit code.
 
 Human output is a table containing each check's `id`, `status`, and `code`. With `--json`, the
 command prints one array validated by `DoctorResultsSchema` from

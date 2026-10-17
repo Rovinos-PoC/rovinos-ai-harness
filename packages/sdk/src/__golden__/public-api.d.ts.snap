@@ -349,6 +349,15 @@ export declare const CreateHarnessOptionsSchema: z.ZodUnion<readonly [z.ZodObjec
                     mod97: "mod97";
                 }>>;
             }, z.core.$strict>>>;
+            failMode: z.ZodDefault<z.ZodEnum<{
+                closed: "closed";
+                regex_only: "regex_only";
+            }>>;
+            presidio: z.ZodOptional<z.ZodObject<{
+                baseUrl: z.ZodURL;
+                language: z.ZodDefault<z.ZodString>;
+                scoreThreshold: z.ZodDefault<z.ZodNumber>;
+            }, z.core.$strict>>;
             detokenize: z.ZodOptional<z.ZodArray<z.ZodObject<{
                 toolId: z.ZodString;
                 args: z.ZodArray<z.ZodString>;
