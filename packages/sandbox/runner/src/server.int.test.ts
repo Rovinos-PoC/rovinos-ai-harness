@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ExecResultSchema } from "../../src/types.js";
 import type { ExecSpec } from "../../src/types.js";
+import { FsToolResultSchema } from "../../src/fs-tools.js";
 
 const execFileAsync = promisify(execFile);
 const root = resolve(fileURLToPath(new URL("../../../../", import.meta.url)));
@@ -254,6 +255,68 @@ describe("sandbox runner Compose service", () => {
     const result = await runExec(makeSpec(["/bin/echo", "runner-ready"]));
 
     expect(result).toMatchObject({ exitCode: 0, stdout: "runner-ready\n" });
+  });
+
+  // threat: T-12
+  it("runs file tools as the command uid for private command-created files", async () => {
+    const ownedRun = Id.parse("00000000000000000000000043");
+    const createFiles = await runExec(
+      makeSpec([
+        "node",
+        "-e",
+        [
+          'const fs = require("node:fs");',
+          'fs.writeFileSync("private.txt", "before", { mode: 0o600 });',
+          'fs.mkdirSync("private", { mode: 0o700 });',
+          'fs.writeFileSync("private/edit.txt", "private-before", { mode: 0o600 });',
+        ].join(""),
+      ]),
+      ownedRun,
+    );
+    expect(createFiles.exitCode).toBe(0);
+
+    const overwrite = await requestRunner(
+      {
+        runId: ownedRun,
+        request: {
+          operation: "write",
+          input: { path: "private.txt", content: "after", mode: "overwrite" },
+        },
+      },
+      { token: integrationToken, path: "/fs/write" },
+    );
+    const edit = await requestRunner(
+      {
+        runId: ownedRun,
+        request: {
+          operation: "edit",
+          input: {
+            path: "private/edit.txt",
+            edits: [{ oldText: "private-before", newText: "private-after" }],
+          },
+        },
+      },
+      { token: integrationToken, path: "/fs/edit" },
+    );
+    const createInPrivateDirectory = await requestRunner(
+      {
+        runId: ownedRun,
+        request: {
+          operation: "write",
+          input: { path: "private/new.txt", content: "created", mode: "create" },
+        },
+      },
+      { token: integrationToken, path: "/fs/write" },
+    );
+
+    expect(overwrite.status).toBe(200);
+    expect(edit.status).toBe(200);
+    expect(createInPrivateDirectory.status).toBe(200);
+    expect(parseJson(FsToolResultSchema, overwrite.body)).toMatchObject({ bytes: 5 });
+    expect(parseJson(FsToolResultSchema, edit.body)).toMatchObject({ bytes: 13 });
+    expect(parseJson(FsToolResultSchema, createInPrivateDirectory.body)).toMatchObject({
+      bytes: 7,
+    });
   });
 
   // threat: T-13

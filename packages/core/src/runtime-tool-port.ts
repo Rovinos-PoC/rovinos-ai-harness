@@ -1,6 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { HarnessError, type Code, type ToolSpec } from "@harness/schemas";
+import {
+  createFsTools,
+  createWebFetchTool,
+  InProcessBackend,
+  RemoteSandboxBackend,
+} from "@harness/sandbox";
+import type { SandboxBackend } from "@harness/sandbox";
 import type { ToolPort } from "./ports.js";
+import type { RuntimeConfig } from "./runtime-config.js";
 
 /** Startup failure raised when two composed tool ports expose the same tool id. */
 export class ToolPortCollisionError extends HarnessError {
@@ -59,8 +67,37 @@ export function composeToolPorts(additional: ToolPort, existing: ToolPort): Tool
   return {
     ...(prepare === undefined ? {} : { prepare }),
     ...(validateInputSchema === undefined ? {} : { validateInputSchema }),
-    describe: (toolId) => portFor(toolId).describe(toolId),
+    describe: (toolId, args) => portFor(toolId).describe(toolId, args),
     getToolSpecs,
     execute: (call, context) => portFor(call.toolId).execute(call, context),
   };
+}
+
+/** Adds runner-backed tools without shadowing tools already owned by the runtime port. */
+export function composeSandboxTools(
+  config: RuntimeConfig,
+  backend: SandboxBackend,
+  existing: ToolPort,
+  useWorkspace: boolean,
+): ToolPort {
+  let composed = existing;
+  if (backend instanceof InProcessBackend || backend instanceof RemoteSandboxBackend) {
+    const candidate = createFsTools(backend);
+    const ownedIds = new Set((existing.getToolSpecs?.() ?? []).map(({ toolId }) => toolId));
+    const excludedIds = candidate
+      .getToolSpecs()
+      .filter(({ toolId }) => ownedIds.has(toolId) || existing.describe(toolId) !== undefined)
+      .map(({ toolId }) => toolId);
+    const fileTools = createFsTools(backend, excludedIds);
+    if (fileTools.getToolSpecs().length > 0) {
+      composed = composeToolPorts(fileTools, composed);
+    }
+  }
+  if (backend instanceof RemoteSandboxBackend) {
+    const webFetch = createWebFetchTool(config.sandbox?.egress?.allow, backend, useWorkspace);
+    if (webFetch !== undefined) {
+      composed = composeToolPorts(webFetch, composed);
+    }
+  }
+  return composed;
 }

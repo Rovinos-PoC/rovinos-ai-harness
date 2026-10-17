@@ -8,12 +8,7 @@ import { PiiToolPort } from "@harness/pii";
 import type { McpToolPort } from "@harness/mcp";
 import type { LocalKeyProvider } from "@harness/vault";
 import type { EventStore } from "@harness/store";
-import {
-  createSandboxBackend,
-  createWebFetchTool,
-  RemoteSandboxBackend,
-  type SandboxBackend,
-} from "@harness/sandbox";
+import { createSandboxBackend, RemoteSandboxBackend, type SandboxBackend } from "@harness/sandbox";
 import { createRuntimeStore } from "./runtime-store.js";
 import { createRuntimeKeys } from "./runtime-keys.js";
 import { createRuntimeModelAndStore } from "./runtime-setup-model.js";
@@ -28,7 +23,7 @@ import { RunScopeRegistry } from "./subagent/scope.js";
 import { resolveRuntimeRoles } from "./subagent/runtime.js";
 import { systemClock, SystemIdGenerator } from "./runtime-ids.js";
 import { createRuntimeWorkspaceSnapshotter } from "./runtime-workspace-snapshot.js";
-import { composeToolPorts } from "./runtime-tool-port.js";
+import { composeSandboxTools } from "./runtime-tool-port.js";
 import type { RoleRegistry } from "./roles.js";
 import type { ToolPort } from "./ports.js";
 import type {
@@ -117,12 +112,7 @@ function createRuntimeTool(
   if (config.pii?.enabled !== false && baseTool instanceof PiiToolPort) {
     throw new PiiToolPortAlreadyWrappedError();
   }
-  // Keep runner fetches behind the same runtime decorators and tool-policy boundary.
-  const webFetchTool =
-    backend instanceof RemoteSandboxBackend
-      ? createWebFetchTool(config.sandbox?.egress?.allow, backend, !!overrides.workspace)
-      : undefined;
-  return webFetchTool === undefined ? baseTool : composeToolPorts(webFetchTool, baseTool);
+  return composeSandboxTools(config, backend, baseTool, !!overrides.workspace);
 }
 
 /** Creates runtime keys, closing a caller-supplied sandbox backend if key resolution fails. */

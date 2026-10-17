@@ -10,6 +10,14 @@ import { RemoteSandboxError } from "./remote-errors.js";
 import { RemoteWorkspaceClient } from "./remote-workspace.js";
 export { RemoteSandboxError } from "./remote-errors.js";
 import {
+  FsOperationErrorCodeSchema,
+  FsOperationRequestSchema,
+  FsToolResultSchema,
+  MAX_FS_TOOL_TIMEOUT_MS,
+} from "./fs-tools.js";
+import type { FsOperation, FsToolResult, WorkspaceFileToolBackend } from "./fs-tools.js";
+import { WorkspaceFileError } from "./workspace-files.js";
+import {
   MAX_WEB_FETCH_BYTES,
   MAX_WEB_FETCH_TIMEOUT_MS,
   WebFetchRequestSchema,
@@ -97,7 +105,9 @@ async function readBoundedResponse(response: Response, maxBytes: number): Promis
  *
  * @param options - Internal runner URL, resolved token, and optional fetch settings.
  */
-export class RemoteSandboxBackend implements SandboxBackend, RemoteWorkspaceSnapshotPort {
+export class RemoteSandboxBackend
+  implements SandboxBackend, WorkspaceFileToolBackend, RemoteWorkspaceSnapshotPort
+{
   readonly #url: string;
   readonly #token: string;
   readonly #timeoutGraceMs: number;
@@ -315,6 +325,79 @@ export class RemoteSandboxBackend implements SandboxBackend, RemoteWorkspaceSnap
       );
     } catch (error) {
       if (error instanceof RemoteSandboxError) {
+        throw error;
+      }
+      if (controller.signal.reason === timeoutReason) {
+        throw new RemoteSandboxError("sandbox_timeout");
+      }
+      if (wasAborted(signal)) {
+        throw new RemoteSandboxError("sandbox_timeout");
+      }
+      throw new RemoteSandboxError("sandbox_unavailable");
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+    }
+  }
+
+  /** Performs a workspace file operation through the authenticated runner endpoint. */
+  async fileOperation(
+    runId: IdValue,
+    operation: FsOperation,
+    input: unknown,
+    signal: AbortSignal,
+  ): Promise<FsToolResult> {
+    const parsed = FsOperationRequestSchema.safeParse({ operation, input });
+    if (!parsed.success) {
+      throw new WorkspaceFileError("fs_invalid_input");
+    }
+    if (signal.aborted) {
+      throw new RemoteSandboxError("sandbox_timeout");
+    }
+    const controller = new AbortController();
+    const timeoutReason = new DOMException("The sandbox file request timed out.", "TimeoutError");
+    const timer = setTimeout(() => {
+      controller.abort(timeoutReason);
+    }, MAX_FS_TOOL_TIMEOUT_MS + this.#timeoutGraceMs);
+    const abort = (): void => {
+      controller.abort();
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const response = await this.#fetcher(new URL(`/fs/${operation}`, this.#url), {
+        method: "POST",
+        redirect: "error",
+        headers: {
+          authorization: ["Bearer", this.#token].join(" "),
+          "content-type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({ runId: Id.parse(runId), request: parsed.data }),
+        signal: controller.signal,
+      });
+      if (response.status === 408 || response.status === 504) {
+        throw new RemoteSandboxError("sandbox_timeout");
+      }
+      const maxResponseBytes = 8 * 1024 * 1024;
+      const responseText = await readBoundedResponse(response, maxResponseBytes);
+      if (!response.ok) {
+        const failure = parseJson(
+          z
+            .object({
+              code: FsOperationErrorCodeSchema.or(z.literal("sandbox_busy")),
+            })
+            .strict(),
+          responseText,
+          { maxBytes: maxResponseBytes },
+        );
+        if (failure.code === "sandbox_busy") {
+          throw new RemoteSandboxError("sandbox_busy");
+        }
+        throw new WorkspaceFileError(failure.code);
+      }
+      return parseJson(FsToolResultSchema, responseText, { maxBytes: maxResponseBytes });
+    } catch (error) {
+      if (error instanceof WorkspaceFileError || error instanceof RemoteSandboxError) {
         throw error;
       }
       if (controller.signal.reason === timeoutReason) {

@@ -25,3 +25,68 @@ rules:
         - sandbox.exec
     decision: ask
     reason: sandbox_execution
+  - id: allow_workspace_file_reads
+    description: Allow safe workspace file inspection
+    match:
+      tools:
+        - fs.read
+        - fs.list
+        - fs.search
+    decision: allow
+    reason: workspace_file_read
+  - id: allow_workspace_file_changes
+    description: Allow workspace changes outside sensitive paths
+    match:
+      tools:
+        - fs.write
+        - fs.edit
+    decision: allow
+    reason: workspace_file_change
+  - id: ask_sensitive_env_files
+    description: Ask before changing environment files
+    match:
+      tools:
+        - fs.write
+        - fs.edit
+      args:
+        - pointer: /path
+          op: matches
+          value: '[^/]{0,255}\.[eE][nN][vV]$'
+    decision: ask
+    reason: sensitive_workspace_file
+  - id: ask_sensitive_env_variants
+    description: Ask before changing environment file variants
+    match:
+      tools:
+        - fs.write
+        - fs.edit
+      args:
+        - pointer: /path
+          op: matches
+          value: '\.[eE][nN][vV]\.[^/]{1,255}$'
+    decision: ask
+    reason: sensitive_workspace_file
+  - id: ask_sensitive_key_files
+    description: Ask before changing private key files
+    match:
+      tools:
+        - fs.write
+        - fs.edit
+      args:
+        - pointer: /path
+          op: matches
+          value: '[^/]{0,255}\.[kK][eE][yY]$'
+    decision: ask
+    reason: sensitive_workspace_file
+  - id: ask_sensitive_pem_files
+    description: Ask before changing PEM files
+    match:
+      tools:
+        - fs.write
+        - fs.edit
+      args:
+        - pointer: /path
+          op: matches
+          value: '[^/]{0,255}\.[pP][eE][mM]$'
+    decision: ask
+    reason: sensitive_workspace_file

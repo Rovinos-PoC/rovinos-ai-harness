@@ -42,7 +42,10 @@ export interface PiiToolResult {
 
 /** Structural port avoids a dependency from PII back to core. */
 export interface PiiToolPortLike {
-  describe(toolId: Code):
+  describe(
+    toolId: Code,
+    args?: JsonValue,
+  ):
     | {
         readonly idempotent: boolean;
         readonly timeoutMs: number;
@@ -65,6 +68,15 @@ export interface PiiToolPortDependencies {
 const safeToolErrorCodes = new Set([
   "args_invalid",
   "binary_result_unavailable",
+  "edit_ambiguous",
+  "edit_no_match",
+  "fs_file_exists",
+  "fs_file_not_found",
+  "fs_invalid_input",
+  "fs_not_directory",
+  "fs_not_file",
+  "fs_operation_failed",
+  "fs_path_invalid",
   "mcp_capability_missing",
   "mcp_connection_lost",
   "mcp_error",
@@ -77,6 +89,8 @@ const safeToolErrorCodes = new Set([
   "mcp_tool_not_found",
   "result_too_large",
   "tool_reported_error",
+  "workspace_quota_exceeded",
+  "precondition_failed",
 ]);
 
 /** Tokenizes before persistence and resolves only allowlisted pointers in memory. */
@@ -87,8 +101,8 @@ export class PiiToolPort implements PiiToolPortLike {
   ) {}
 
   /** Forwards retry and timeout metadata. */
-  describe(toolId: Code): ReturnType<PiiToolPortLike["describe"]> {
-    return this.inner.describe(toolId);
+  describe(toolId: Code, args?: JsonValue): ReturnType<PiiToolPortLike["describe"]> {
+    return this.inner.describe(toolId, args);
   }
 
   /**

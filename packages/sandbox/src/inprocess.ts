@@ -2,8 +2,10 @@
 import { spawn } from "node:child_process";
 import { resolve as resolvePath } from "node:path";
 import process from "node:process";
-import { HarnessError, type Code, type Id } from "@harness/schemas";
+import { HarnessError, Id, type Code, type Id as IdValue } from "@harness/schemas";
 import { ensureRunWorkspace, resolveWorkspacePath } from "./workspace.js";
+import { WorkspaceFileSystem, WorkspaceFileError } from "./workspace-files.js";
+import type { FsOperation, FsToolResult } from "./fs-tools.js";
 import { ExecTimeoutMsSchema, MAX_EXEC_TIMEOUT_MS } from "./types.js";
 import type { Clock, ExecResult, ExecSpec, SandboxBackend } from "./types.js";
 
@@ -138,6 +140,7 @@ export class InProcessBackend implements SandboxBackend {
   readonly #workspaceRoot: string;
   readonly #clock: Clock;
   readonly #maxTimeoutMs: number;
+  readonly #workspaceFiles: WorkspaceFileSystem;
 
   /**
    * Create the local backend, recording its safety and unenforced-limit codes at startup.
@@ -152,6 +155,7 @@ export class InProcessBackend implements SandboxBackend {
       throw new InProcessBackendError();
     }
     this.#workspaceRoot = options.workspaceRoot;
+    this.#workspaceFiles = new WorkspaceFileSystem(options.workspaceRoot);
     this.#clock = options.clock ?? DEFAULT_CLOCK;
     this.#maxTimeoutMs = ExecTimeoutMsSchema.parse(options.maxTimeoutMs ?? MAX_EXEC_TIMEOUT_MS);
   }
@@ -236,5 +240,18 @@ export class InProcessBackend implements SandboxBackend {
       }
       child.stdin.end(spec.stdin ?? "");
     });
+  }
+
+  /** Performs one shell-free workspace file operation for the active run. */
+  async fileOperation(
+    runId: IdValue,
+    operation: FsOperation,
+    input: unknown,
+    signal: AbortSignal,
+  ): Promise<FsToolResult> {
+    if (signal.aborted) {
+      throw new WorkspaceFileError("fs_operation_failed");
+    }
+    return this.#workspaceFiles.execute(Id.parse(runId), operation, input, signal);
   }
 }

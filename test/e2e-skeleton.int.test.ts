@@ -48,6 +48,8 @@ import {
 import { FakeModelPort } from "@harness/core/testing";
 import {
   ExecSpecSchema,
+  FsOperationRequestSchema,
+  FsToolResultSchema,
   RemoteSandboxBackend,
   WebFetchRequestSchema,
   WebFetchResultSchema,
@@ -1724,7 +1726,7 @@ describe.skipIf(!(await dockerAvailable()))("configured remote sandbox", () => {
   }, 240_000);
 
   // threat: T-05
-  it("runs web.fetch through the runtime and tokenizes the untrusted egress fixture result", async () => {
+  it("runs web and workspace file tools through runtime PII boundaries", async () => {
     const current = fixture();
     const directory = await mkdtemp(join(tmpdir(), "harness-web-fetch-e2e-"));
     const token = "synthetic-e2e-runner-token-for-web-fetch";
@@ -1753,30 +1755,35 @@ describe.skipIf(!(await dockerAvailable()))("configured remote sandbox", () => {
         "infra/compose/docker-compose.egress.yml",
         "infra/compose/docker-compose.egress.test.yml",
       ]);
-    const requestSchema = z.object({ runId: Id, request: WebFetchRequestSchema }).strict();
+    const requestSchema = z.union([
+      z.object({ runId: Id, request: WebFetchRequestSchema }).strict(),
+      z.object({ runId: Id, request: FsOperationRequestSchema }).strict(),
+    ]);
     const responseSchema = z.object({ status: z.number().int(), body: z.string() }).strict();
     const forwarded: z.infer<typeof requestSchema>[] = [];
     const responses: z.infer<typeof responseSchema>[] = [];
     const bridge = createServer((request, response) => {
       const forward = async () => {
         expect(request.method).toBe("POST");
-        expect(request.url).toBe("/fetch");
+        const endpoint = request.url ?? "";
+        expect(endpoint === "/fetch" || endpoint.startsWith("/fs/")).toBe(true);
+        const requestLimit = endpoint.startsWith("/fs/") ? 32 * 1024 * 1024 : 2 * 1024 * 1024;
         const chunks: Buffer[] = [];
         let bytes = 0;
         for await (const chunk of request) {
           const buffer = z.instanceof(Buffer).parse(chunk);
           bytes += buffer.byteLength;
-          if (bytes > 2 * 1024 * 1024) {
+          if (bytes > requestLimit) {
             throw new Error("Web fetch request exceeds the boundary limit.");
           }
           chunks.push(buffer);
         }
         const body = Buffer.concat(chunks).toString("utf8");
-        const parsed = parseJson(requestSchema, body, { maxBytes: 2 * 1024 * 1024 });
+        const parsed = parseJson(requestSchema, body, { maxBytes: requestLimit });
         forwarded.push(parsed);
         const script = [
           'const http = require("node:http");',
-          `const request = http.request({ hostname: "127.0.0.1", port: 8080, path: "/fetch", method: "POST", headers: ${JSON.stringify({ host: "sandbox-runner:8080", authorization: request.headers.authorization, "content-type": "application/json" })} }, (response) => {`,
+          `const request = http.request({ hostname: "127.0.0.1", port: 8080, path: ${JSON.stringify(endpoint)}, method: "POST", headers: ${JSON.stringify({ host: "sandbox-runner:8080", authorization: request.headers.authorization, "content-type": "application/json" })} }, (response) => {`,
           '  const chunks = []; let bytes = 0; response.on("data", (chunk) => { bytes += chunk.length; if (bytes > 2097152) { response.destroy(); process.exitCode = 1; } else { chunks.push(chunk); } });',
           '  response.on("end", () => process.stdout.write(JSON.stringify({ status: response.statusCode, body: Buffer.concat(chunks).toString() })));',
           "});",
@@ -1820,6 +1827,7 @@ describe.skipIf(!(await dockerAvailable()))("configured remote sandbox", () => {
       if (address === null || typeof address === "string") {
         throw new Error("The web.fetch test bridge is not listening.");
       }
+      const fileCanary = "workspace.file@example.test";
       const model = new FakeModelPort([
         completion(
           [
@@ -1827,6 +1835,21 @@ describe.skipIf(!(await dockerAvailable()))("configured remote sandbox", () => {
               callId: "00000000000000000000000020",
               toolId: "web.fetch",
               args: { url: `http://${probeHost}:8080/runtime` },
+            },
+            {
+              callId: "00000000000000000000000021",
+              toolId: "fs.write",
+              args: {
+                path: "notes.txt",
+                content: fileCanary,
+                mode: "create",
+                expectedSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              },
+            },
+            {
+              callId: "00000000000000000000000022",
+              toolId: "fs.read",
+              args: { path: "notes.txt" },
             },
           ],
           "fetch",
@@ -1872,16 +1895,56 @@ describe.skipIf(!(await dockerAvailable()))("configured remote sandbox", () => {
       if (toolResult?.type !== "tool_result") {
         throw new Error("The runtime did not record the web.fetch result.");
       }
+      const fileRead = result.events.find(
+        (event) => event.type === "tool_result" && event.toolId === "fs.read",
+      );
+      if (fileRead?.type !== "tool_result") {
+        throw new Error("The runtime did not record the workspace file result.");
+      }
+      const fileWriteIntent = result.events.find(
+        (event) => event.type === "tool_intent" && event.toolId === "fs.write",
+      );
 
       expect(result.status).toBe("completed");
       expect(model.requests[0]?.request.tools?.map(({ toolId }) => toolId)).toContain("web.fetch");
-      expect(decide).toHaveBeenCalledOnce();
-      expect(forwarded).toMatchObject([{ request: { url: `http://${probeHost}:8080/runtime` } }]);
-      expect(responses).toMatchObject([{ status: 200 }]);
+      expect(model.requests[0]?.request.tools?.map(({ toolId }) => toolId)).toEqual(
+        expect.arrayContaining(["fs.read", "fs.write", "fs.edit", "fs.list", "fs.search"]),
+      );
+      expect(decide).toHaveBeenCalledTimes(3);
+      const forwardedFetch = forwarded.find(({ request }) => "url" in request)?.request;
+      expect(forwardedFetch).toMatchObject({ url: `http://${probeHost}:8080/runtime` });
+      const forwardedFileRequests = forwarded.flatMap(({ request }) =>
+        "operation" in request ? [request] : [],
+      );
+      expect(forwardedFileRequests).toEqual(
+        expect.arrayContaining([
+          {
+            operation: "write",
+            input: {
+              content: "<EMAIL_1>",
+              expectedSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              mode: "create",
+              path: "notes.txt",
+            },
+          },
+          { operation: "read", input: { path: "notes.txt" } },
+        ]),
+      );
+      expect(responses).toHaveLength(3);
+      expect(responses.every(({ status }) => status === 200)).toBe(true);
       expect(WebFetchResultSchema.parse(toolResult.result)).toMatchObject({
-        text: "Contact <EMAIL_1>",
+        text: "Contact <EMAIL_2>",
         untrusted: true,
       });
+      expect(FsToolResultSchema.parse(fileRead.result)).toMatchObject({
+        binary: false,
+        content: "<EMAIL_1>",
+      });
+      expect(fileWriteIntent).toMatchObject({ idempotent: true });
+      expect(JSON.stringify(forwarded)).not.toContain(fileCanary);
+      expect(JSON.stringify(result.events)).not.toContain(fileCanary);
+      expect(JSON.stringify(current.spans)).not.toContain(fileCanary);
+      expect(JSON.stringify(current.logs)).not.toContain(fileCanary);
       expect(JSON.stringify(result.events)).not.toContain("runtime.fetch@example.test");
       expect(JSON.stringify(current.spans)).not.toContain("runtime.fetch@example.test");
       expect(JSON.stringify(current.logs)).not.toContain("runtime.fetch@example.test");

@@ -34,7 +34,7 @@ export function planDanglingIntents(
   policy: ResumePolicy = "escalate",
 ): DanglingIntentAction[] {
   return Array.from(state.pendingToolCalls.values(), (intent) => {
-    const description = toolPort.describe(intent.toolId);
+    const description = toolPort.describe(intent.toolId, intent.args);
     if (description === undefined) {
       return { kind: "fail", callId: intent.callId, errorCode: "unknown_tool" };
     }

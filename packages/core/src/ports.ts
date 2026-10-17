@@ -133,9 +133,10 @@ export interface ToolPort {
    * Returns execution metadata for a known tool.
    *
    * @param toolId - Tool identifier from the model response.
+   * @param args - Optional call arguments used for argument-dependent metadata.
    * @returns Tool metadata, or undefined when the tool is unknown.
    */
-  describe(toolId: Code): ToolDescription | undefined;
+  describe(toolId: Code, args?: JsonValue): ToolDescription | undefined;
 
   /**
    * Executes one model-proposed tool call.

@@ -65,7 +65,9 @@ export class ApprovalEditNotAllowedError extends HarnessError {
 }
 
 function resultToolId(options: Pick<ResumeToolStepOptions, "tool">, intent: ToolIntentEvent): Code {
-  return options.tool.describe(intent.toolId) === undefined ? UNREGISTERED_TOOL_ID : intent.toolId;
+  return options.tool.describe(intent.toolId, intent.args) === undefined
+    ? UNREGISTERED_TOOL_ID
+    : intent.toolId;
 }
 
 async function recordDanglingFailure(
@@ -223,7 +225,7 @@ async function applyDanglingIntentAction(
     return "escalate";
   }
 
-  const description = options.tool.describe(intent.toolId);
+  const description = options.tool.describe(intent.toolId, intent.args);
   if (description === undefined) {
     return recordDanglingFailure(options, intent, "unknown_tool");
   }
@@ -276,7 +278,7 @@ export async function applyApprovalDecision(
     args = resolution.edits;
   }
   const call: ModelToolCall = { callId: intent.callId, toolId: intent.toolId, args };
-  const description = options.tool.describe(intent.toolId);
+  const description = options.tool.describe(intent.toolId, intent.args);
   if (description !== undefined) {
     await options.beforeToolExecution?.();
   }
@@ -331,7 +333,7 @@ export async function resolveDanglingIntentApproval(
   if (resolution.decision === "deny") {
     return recordDanglingFailure(options, intent, "resume_ambiguous");
   }
-  const description = options.tool.describe(intent.toolId);
+  const description = options.tool.describe(intent.toolId, intent.args);
   if (description === undefined) {
     return recordDanglingFailure(options, intent, "unknown_tool");
   }

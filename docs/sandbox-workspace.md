@@ -46,6 +46,35 @@ trees. Commands receive an absolute, run-specific `.harness/tmp` as `TMPDIR`.
 The runner container also mounts `/tmp` as an ephemeral tmpfs. The harness does
 not execute files from the workspace.
 
+## File tools
+
+The built-in `fs.read`, `fs.write`, `fs.edit`, `fs.list`, and `fs.search` tools
+operate on paths relative to `project/`; they do not accept shell commands.
+Every requested path passes through the workspace resolver, which rejects
+absolute paths, traversal, and symlinks. The `.harness/` tree is not accessible
+through these tools; use `read_offloaded` for offloaded output.
+
+`fs.read` returns UTF-8 text in ranges of at most 256 KiB. Binary files return
+only `{ binary: true, bytes }`. Writes accept at most 1 MiB of UTF-8 text;
+`create` requires a missing path and `overwrite` requires an existing regular
+file. Edits apply 1–20 exact-text replacements, each of which must occur once;
+their combined old/new text is limited to 4 MiB. `/fs/<operation>` requests
+allow up to 32 MiB of JSON transport to accommodate escaping.
+An optional `expectedSha256` checks the prior bytes (the SHA-256 of empty bytes
+represents a missing path for `create`). A retry after a successful preconditioned
+write or edit fails with `precondition_failed`; unchanged output is rejected so
+the original precondition cannot be reused.
+
+`fs.list` is limited to depth 3 and 1,000 entries. `fs.search` returns at most
+200 text-line matches and scans no more than 10 MiB or 1,000 files per request;
+only the first 2,048 characters of each line are matched. Regex queries pass
+the shared conservative ReDoS screen. File size and run quota failures use
+`workspace_quota_exceeded`. The existing 10 MiB per-file and 500 MiB per-run
+workspace limits apply to file reads and mutations. File results are returned through the runtime's usual PII
+and output-offloading decorators. Read, list, and search are idempotent;
+write and edit are advertised as idempotent only when they include
+`expectedSha256`.
+
 ## Assumptions and known gaps
 
 The shared group and volume permissions must be preserved by the deployment's
@@ -53,3 +82,16 @@ volume driver. The remote runner is the isolation boundary; the explicitly
 development-only in-process backend scopes its working directory but does not
 provide operating-system filesystem isolation from arbitrary absolute paths
 used by a command.
+
+Atomic replacements write and sync a temporary sibling, then compare the
+target's device, inode, size, and modification time immediately before rename.
+Rename requires write permission on the target's parent directory; when that
+permission is unavailable, the operation may fail without replacing the target.
+This narrows but cannot eliminate the final stat-to-rename race or make parent
+path resolution descriptor-relative. Runner leases serialize normal `exec` and
+file-tool requests. Runner dispatch also serializes `fetch`, `exec`, file
+operations, and lease transitions so none overlap a process-wide credential
+switch. Deployments and snapshot/restore code must not mutate an active workspace
+through another process. Quotas are checked during file mutations, not
+continuously enforced against arbitrary changes made by commands or external
+volume writers.

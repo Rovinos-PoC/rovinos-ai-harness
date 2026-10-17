@@ -15,6 +15,7 @@ import { restoreWorkspaceArchive } from "../../src/snapshot-restore.js";
 import type { RunnerPayload, RunnerResponse } from "./request-handler.js";
 import type { RunnerServerOptions } from "./server.js";
 import type { RunnerLeaseManager } from "./lease.js";
+import { withRunnerProcessLock } from "./process-lock.js";
 
 const ID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -161,12 +162,14 @@ export async function handleWorkspacePayload(input: {
     const acquired = await context.leases.withWorkspaceLease(payload.runId, async () => {
       context.setBusy(true);
       try {
-        if (payload.kind === "workspace-snapshot") {
-          await sendWorkspaceSnapshot(context, payload, response);
-        } else {
-          await restoreWorkspace(context, payload);
-          sendJson(response, 200, { status: "ok" });
-        }
+        await withRunnerProcessLock(async () => {
+          if (payload.kind === "workspace-snapshot") {
+            await sendWorkspaceSnapshot(context, payload, response);
+          } else {
+            await restoreWorkspace(context, payload);
+            sendJson(response, 200, { status: "ok" });
+          }
+        });
       } finally {
         context.setBusy(false);
       }

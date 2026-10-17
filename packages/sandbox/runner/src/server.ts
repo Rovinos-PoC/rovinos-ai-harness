@@ -10,18 +10,21 @@ import type { Id as IdValue } from "@harness/schemas";
 import { z } from "zod";
 import { executeSpec, SANDBOX_EXEC_GID, SANDBOX_EXEC_UID } from "./exec.js";
 import { MAX_EXEC_TIMEOUT_MS } from "../../src/types.js";
+import { WorkspaceFileSystem } from "../../src/workspace-files.js";
 import type { Clock, ExecResult, ExecSpec } from "../../src/types.js";
 import type { WebFetchRequest, WebFetchResult } from "../../src/web-fetch-contracts.js";
 import {
   executeRunnerPayload,
   readRunnerPayload,
+  type RunnerPayload,
   type RunnerRequest,
   type RunnerResponse,
-  type RunnerPayload,
 } from "./request-handler.js";
 import { RunnerLeaseManager } from "./lease.js";
 import { handleWorkspacePayload } from "./workspace-handler.js";
 import { authorityFrom, validHost, validOrigin } from "./server-origin.js";
+import { withRunnerProcessLock, systemRunnerCredentials } from "./process-lock.js";
+import type { RunnerCredentialApi } from "./process-lock.js";
 
 const REQUEST_TIMEOUT_MS = MAX_EXEC_TIMEOUT_MS + 10_000;
 const TOKEN_HASH_BYTES = 32;
@@ -221,6 +224,10 @@ interface RunnerRequestContext {
   readonly options: RunnerServerOptions;
   readonly allowedHosts: ReadonlySet<string>;
   readonly tokenHash: Buffer;
+  readonly workspaceFiles: WorkspaceFileSystem;
+  readonly executionUid: number | undefined;
+  readonly executionGid: number | undefined;
+  readonly credentials: RunnerCredentialApi;
   readonly isBusy: () => boolean;
   readonly setBusy: (busy: boolean) => void;
   readonly leases: RunnerLeaseManager;
@@ -231,24 +238,6 @@ async function handleControlPayload(
   payload: RunnerPayload,
   response: RunnerResponse,
 ): Promise<boolean> {
-  if (payload.kind === "lease") {
-    const acquired = await context.leases.acquire(payload.runId, payload.ttlMs);
-    if (acquired) {
-      sendJson(response, 200, { status: "ok" });
-    } else {
-      writeError(response, 409, "sandbox_busy");
-    }
-    return true;
-  }
-  if (payload.kind === "release") {
-    const released = !context.isBusy() && (await context.leases.release(payload.runId));
-    if (released) {
-      sendJson(response, 200, { status: "ok" });
-    } else {
-      writeError(response, 409, "sandbox_busy");
-    }
-    return true;
-  }
   if (
     payload.kind === "workspace-snapshot" ||
     payload.kind === "workspace-exists" ||
@@ -271,7 +260,7 @@ async function handleRunnerRequest(
   request: RunnerRequest,
   response: RunnerResponse,
 ): Promise<void> {
-  const { options, allowedHosts, tokenHash } = context;
+  const { allowedHosts, tokenHash } = context;
   try {
     if (!validHost(request, allowedHosts) || !validOrigin(request.headers.origin, allowedHosts)) {
       writeError(response, 400, "sandbox_host_rejected");
@@ -290,49 +279,80 @@ async function handleRunnerRequest(
     if (payload === undefined) {
       return;
     }
-    if (await handleControlPayload(context, payload, response)) {
-      return;
-    }
-    if (payload.kind !== "exec" && payload.kind !== "fetch") {
-      writeError(response, 400, "sandbox_request_invalid");
-      return;
-    }
-    if (!(await context.leases.renew(payload.runId))) {
-      writeError(response, 409, "sandbox_busy");
-      return;
-    }
-    if (context.isBusy()) {
-      writeError(response, 409, "sandbox_busy");
-      return;
-    }
-    context.setBusy(true);
-    const controller = new AbortController();
-    response.once("close", () => {
-      if (!response.writableEnded) {
-        controller.abort();
-      }
-    });
-    try {
-      await executeRunnerPayload({
-        options,
-        payload,
-        response,
-        signal: controller.signal,
-        executeSpec: (runId, spec, signal) => executeRunnerSpec(options, runId, spec, signal),
-        sendJson,
-        sendError: writeError,
-      });
-    } finally {
-      context.setBusy(false);
-      await context.leases.finishExecution(payload.runId);
-      await context.leases.expireDue();
-    }
+    await handleRunnerPayload(context, payload, response);
   } catch {
     if (!response.headersSent) {
       writeError(response, 500, "sandbox_internal_error");
     } else {
       response.destroy();
     }
+  }
+}
+
+async function handleRunnerPayload(
+  context: RunnerRequestContext,
+  payload: RunnerPayload,
+  response: RunnerResponse,
+): Promise<void> {
+  if (await handleControlPayload(context, payload, response)) {
+    return;
+  }
+  if (payload.kind === "lease") {
+    writeLeaseResult(await context.leases.acquire(payload.runId, payload.ttlMs), response);
+    return;
+  }
+  if (payload.kind === "release") {
+    writeLeaseResult(!context.isBusy() && (await context.leases.release(payload.runId)), response);
+    return;
+  }
+  if (payload.kind !== "exec" && payload.kind !== "fetch" && payload.kind !== "fs") {
+    writeError(response, 400, "sandbox_request_invalid");
+    return;
+  }
+  if (context.isBusy()) {
+    writeError(response, 409, "sandbox_busy");
+    return;
+  }
+  if (!(await context.leases.renew(payload.runId)) || context.isBusy()) {
+    writeError(response, 409, "sandbox_busy");
+    return;
+  }
+  context.setBusy(true);
+  const controller = new AbortController();
+  response.once("close", () => {
+    if (!response.writableEnded) {
+      controller.abort();
+    }
+  });
+  try {
+    await withRunnerProcessLock(() =>
+      executeRunnerPayload({
+        options: context.options,
+        payload,
+        response,
+        signal: controller.signal,
+        executeSpec: (runId, spec, signal) =>
+          executeRunnerSpec(context.options, runId, spec, signal),
+        workspaceFiles: context.workspaceFiles,
+        executionUid: context.executionUid,
+        executionGid: context.executionGid,
+        credentials: context.credentials,
+        sendJson,
+        sendError: writeError,
+      }),
+    );
+  } finally {
+    context.setBusy(false);
+    await context.leases.finishExecution(payload.runId);
+    await context.leases.expireDue();
+  }
+}
+
+function writeLeaseResult(acquired: boolean, response: RunnerResponse): void {
+  if (acquired) {
+    sendJson(response, 200, { status: "ok" });
+  } else {
+    writeError(response, 409, "sandbox_busy");
   }
 }
 
@@ -344,6 +364,7 @@ async function handleRunnerRequest(
  */
 export function createRunnerRequestHandler(
   options: RunnerServerOptions,
+  credentials: RunnerCredentialApi = systemRunnerCredentials,
 ): (request: RunnerRequest, response: RunnerResponse) => Promise<void> {
   const allowedHosts = validateRunnerOptions(options);
   const tokenHash = hashToken(options.token);
@@ -352,6 +373,7 @@ export function createRunnerRequestHandler(
     options.executionUid ?? (options.execute === undefined ? SANDBOX_EXEC_UID : process.getuid?.());
   const executionGid =
     options.executionGid ?? (options.execute === undefined ? SANDBOX_EXEC_GID : process.getgid?.());
+  const workspaceFiles = new WorkspaceFileSystem(options.workspaceRoot);
   const leases = new RunnerLeaseManager({
     ...options,
     ...(executionUid === undefined ? {} : { executionUid }),
@@ -362,6 +384,10 @@ export function createRunnerRequestHandler(
     options,
     allowedHosts,
     tokenHash,
+    workspaceFiles,
+    executionUid,
+    executionGid,
+    credentials,
     isBusy: () => activeExec,
     setBusy: (busy) => {
       activeExec = busy;

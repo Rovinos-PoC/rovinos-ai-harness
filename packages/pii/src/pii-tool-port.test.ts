@@ -282,19 +282,24 @@ describe("PiiToolPort", () => {
     expect(JSON.stringify(result)).not.toContain("attacker.canary");
   });
 
-  it.each(["tool_reported_error", "mcp_internal_error", "mcp_timeout"] as const)(
-    "preserves stable MCP error code %s",
-    async (errorCode) => {
-      const { port, context, execute } = fixture();
-      execute.mockResolvedValue({ outcome: "error", errorCode, result: null });
-      const prepared = await port.prepare(call, context);
-      await expect(port.execute(prepared, context)).resolves.toMatchObject({
-        outcome: "error",
-        errorCode,
-        result: null,
-      });
-    },
-  );
+  it.each([
+    "tool_reported_error",
+    "mcp_internal_error",
+    "mcp_timeout",
+    "precondition_failed",
+    "edit_no_match",
+    "edit_ambiguous",
+    "workspace_quota_exceeded",
+  ] as const)("preserves trusted closed tool error code %s", async (errorCode) => {
+    const { port, context, execute } = fixture();
+    execute.mockResolvedValue({ outcome: "error", errorCode, result: null });
+    const prepared = await port.prepare(call, context);
+    await expect(port.execute(prepared, context)).resolves.toMatchObject({
+      outcome: "error",
+      errorCode,
+      result: null,
+    });
+  });
 
   it("rejects unresolved tokens before execution", async () => {
     const { port, context, execute } = fixture();

@@ -166,8 +166,11 @@ export async function ensureRunWorkspace(workspacesRoot: string, runId: IdValue)
   ] as const) {
     await mkdir(directory, { recursive: true, mode });
     await assertDirectory(directory);
-    // mkdir applies the process umask (often 022), which would drop group write.
-    await chmod(directory, mode);
+    const info = await lstat(directory);
+    if ((info.mode & 0o7777) !== mode) {
+      // mkdir applies the process umask (often 022), which would drop group write.
+      await chmod(directory, mode);
+    }
   }
   return join(runRoot, "project");
 }

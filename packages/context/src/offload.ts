@@ -135,7 +135,7 @@ export interface OffloadToolPortLike {
   /** Sanitizes arguments before durable recording. */
   prepare?(call: OffloadToolCall, context: OffloadRunContext): Promise<OffloadToolCall>;
   /** Returns metadata for a registered tool. */
-  describe(toolId: Code): OffloadToolDescription | undefined;
+  describe(toolId: Code, args?: JsonValueType): OffloadToolDescription | undefined;
 
   /** Returns provider-visible specifications for registered tools, when available. */
   getToolSpecs?(): readonly ToolSpec[];
@@ -451,11 +451,11 @@ export class OffloadingToolPort implements OffloadToolPortLike {
   }
 
   /** {@inheritDoc OffloadToolPortLike.describe} */
-  describe(toolId: Code): OffloadToolDescription | undefined {
+  describe(toolId: Code, args?: JsonValueType): OffloadToolDescription | undefined {
     if (toolId === "read_offloaded") {
       return { idempotent: true, timeoutMs: 30_000 };
     }
-    return this.inner.describe(toolId);
+    return this.inner.describe(toolId, args);
   }
 
   /** {@inheritDoc OffloadToolPortLike.getToolSpecs} */

@@ -65,7 +65,7 @@ export interface PlanToolDescription {
 /** Shape required of the wrapped tool executor. */
 export interface PlanToolPortLike {
   /** Returns metadata for a registered tool. */
-  describe(toolId: Code): PlanToolDescription | undefined;
+  describe(toolId: Code, args?: JsonValueType): PlanToolDescription | undefined;
 
   /** Returns provider-visible specifications for registered tools. */
   getToolSpecs?(): readonly ToolSpec[];
@@ -111,11 +111,11 @@ export class PlanToolPort implements PlanToolPortLike {
   }
 
   /** {@inheritDoc PlanToolPortLike.describe} */
-  describe(toolId: Code): PlanToolDescription | undefined {
+  describe(toolId: Code, args?: JsonValueType): PlanToolDescription | undefined {
     if (PLAN_TOOL_IDS.has(toolId)) {
       return { idempotent: true, timeoutMs: TOOL_TIMEOUT_MS };
     }
-    return this.inner.describe(toolId);
+    return this.inner.describe(toolId, args);
   }
 
   /** {@inheritDoc PlanToolPortLike.getToolSpecs} */

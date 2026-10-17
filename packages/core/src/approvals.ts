@@ -145,7 +145,7 @@ async function prepareApprovalEdits(options: PrepareApprovalEditOptions): Promis
   return validateEdits(
     parsedPayload.data,
     pointerEdits,
-    tool.describe(intent.toolId)?.inputSchema,
+    tool.describe(intent.toolId, intent.args)?.inputSchema,
     {
       tokenize: async (args) => {
         const prepared = await prepareToolCall(
@@ -350,7 +350,7 @@ export async function resolveApproval(
             recorder,
             events,
           });
-          if (tool.describe(intent.toolId) === undefined) {
+          if (tool.describe(intent.toolId, intent.args) === undefined) {
             throw new ApprovalEditError("edit_invalid");
           }
         }

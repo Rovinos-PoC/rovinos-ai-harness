@@ -414,7 +414,9 @@ export async function toolStep(options: ToolStepOptions): Promise<readonly Event
   const events: Event[] = [];
   for (const [index, call] of options.calls.entries()) {
     const description =
-      call.toolId === "harness.telemetry.emit" ? undefined : options.tool.describe(call.toolId);
+      call.toolId === "harness.telemetry.emit"
+        ? undefined
+        : options.tool.describe(call.toolId, call.args);
     const prepared = options.preparedCalls?.[index];
     const behavior = prepared === undefined ? {} : { prepared };
     events.push(...(await runToolCall(options, call, description, behavior)));

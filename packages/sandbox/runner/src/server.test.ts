@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { mkdtempSync } from "node:fs";
@@ -25,6 +26,9 @@ import type { RunnerServerOptions } from "./server.js";
 import type { ExecResult, ExecSpec } from "../../src/types.js";
 import { fetchWebContent } from "./web-fetch.js";
 import type { ProxyRequest, ProxyResponse, WebFetchTransport } from "./web-fetch-transport.js";
+import { ensureRunWorkspace } from "../../src/workspace.js";
+import { WorkspaceFileSystem } from "../../src/workspace-files.js";
+import type { RunnerCredentialApi } from "./process-lock.js";
 
 const token = "synthetic-runner-token-that-is-at-least-32-bytes";
 const runId = Id.parse("00000000000000000000000001");
@@ -447,6 +451,144 @@ describe("runner HTTP request handler", () => {
     expect(oversized.status).toBe(413);
   });
 
+  it("rejects a mismatch between the /fs route and its body operation", async () => {
+    const handler = createRunnerRequestHandler(makeOptions());
+    const response = await call(
+      handler,
+      makeRequest({
+        url: "/fs/read",
+        authorization: "Bearer " + token,
+        body: JSON.stringify({
+          runId,
+          request: {
+            operation: "write",
+            input: { path: "mismatch.txt", content: "synthetic", mode: "create" },
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(responseBody(response)).toMatchObject({ code: "sandbox_request_invalid" });
+  });
+
+  it("serializes concurrent preconditioned file edits through the runner handler", async () => {
+    const runIdForFile = Id.parse("00000000000000000000000022");
+    const project = await ensureRunWorkspace(workspaceRoot, runIdForFile);
+    const path = join(project, "concurrent.txt");
+    const original = "before";
+    await writeFile(path, original);
+    const expectedSha256 = createHash("sha256").update(original).digest("hex");
+    const handler = createRunnerRequestHandler(makeOptions());
+    const request = () =>
+      call(
+        handler,
+        makeRequest({
+          url: "/fs/edit",
+          authorization: "Bearer " + token,
+          body: JSON.stringify({
+            runId: runIdForFile,
+            request: {
+              operation: "edit",
+              input: {
+                path: "concurrent.txt",
+                edits: [{ oldText: original, newText: "after" }],
+                expectedSha256,
+              },
+            },
+          }),
+        }),
+      );
+
+    const responses = await Promise.all([request(), request()]);
+    expect(responses.filter((response) => response.status === 200)).toHaveLength(1);
+    expect(responses.filter((response) => response.status === 409)).toHaveLength(1);
+    expect(await readFile(path, "utf8")).toBe("after");
+  });
+
+  it("serializes lease requests until file operations restore process credentials", async () => {
+    const executionUid = 10003;
+    const executionGid = 10003;
+    let currentUid = 10002;
+    let currentGid = 10002;
+    const credentials: RunnerCredentialApi = {
+      geteuid: () => currentUid,
+      getegid: () => currentGid,
+      seteuid: (uid) => {
+        currentUid = uid;
+      },
+      setegid: (gid) => {
+        currentGid = gid;
+      },
+    };
+    let markStarted: () => void = () => undefined;
+    let releaseOperation: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseOperation = resolve;
+    });
+    const executeFileOperation = vi
+      .spyOn(WorkspaceFileSystem.prototype, "execute")
+      .mockImplementation(async () => {
+        expect(credentials.geteuid()).toBe(executionUid);
+        expect(credentials.getegid()).toBe(executionGid);
+        markStarted();
+        await gate;
+        return { binary: false, bytes: 0, content: "", offset: 0, path: "idle.txt" };
+      });
+    const handler = createRunnerRequestHandler(
+      makeOptions({ executionUid, executionGid }),
+      credentials,
+    );
+    try {
+      const fileResponse = new MemoryResponse();
+      const pendingFile = handler(
+        makeRequest({
+          url: "/fs/read",
+          authorization: "Bearer " + token,
+          body: JSON.stringify({
+            runId,
+            request: { operation: "read", input: { path: "idle.txt" } },
+          }),
+        }),
+        fileResponse,
+      );
+      await started;
+      let identityAtLeaseResponse: readonly [number | undefined, number | undefined] | undefined;
+      class LeaseIdentityResponse extends MemoryResponse {
+        override end(body?: string): void {
+          identityAtLeaseResponse = [credentials.geteuid(), credentials.getegid()];
+          super.end(body);
+        }
+      }
+      const leaseResponse = new LeaseIdentityResponse();
+      const pendingLease = handler(
+        makeRequest({
+          url: "/lease",
+          authorization: "Bearer " + token,
+          body: JSON.stringify({ runId }),
+        }),
+        leaseResponse,
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(leaseResponse.writableEnded).toBe(false);
+      releaseOperation();
+      await Promise.all([pendingFile, pendingLease]);
+
+      expect(fileResponse.status).toBe(200);
+      expect(leaseResponse.status).toBe(200);
+      expect(identityAtLeaseResponse).toEqual([10002, 10002]);
+      expect(credentials.geteuid()).toBe(10002);
+      expect(credentials.getegid()).toBe(10002);
+      expect(executeFileOperation).toHaveBeenCalledOnce();
+    } finally {
+      releaseOperation();
+      executeFileOperation.mockRestore();
+    }
+  });
+
   it("executes an authenticated request and returns a schema-validated result", async () => {
     const execute = vi.fn(() => Promise.resolve(result));
     const handler = createRunnerRequestHandler(makeOptions({ execute }));
@@ -509,7 +651,7 @@ describe("runner HTTP request handler", () => {
     });
   });
 
-  it("rejects overlapping executions with a busy response", async () => {
+  it("rejects a file operation while an execution is busy", async () => {
     let releaseExecution: (value: ExecResult) => void = () => undefined;
     let markStarted: () => void = () => undefined;
     const started = new Promise<void>((resolve) => {
@@ -533,7 +675,14 @@ describe("runner HTTP request handler", () => {
     await started;
     const second = await call(
       handler,
-      makeRequest({ authorization: "Bearer " + token, body: makePayload() }),
+      makeRequest({
+        url: "/fs/read",
+        authorization: "Bearer " + token,
+        body: JSON.stringify({
+          runId,
+          request: { operation: "read", input: { path: "busy.txt" } },
+        }),
+      }),
     );
     releaseExecution(result);
     await first;

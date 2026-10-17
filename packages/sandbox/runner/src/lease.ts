@@ -11,6 +11,7 @@ import {
   sealPersistedRunWorkspaces,
 } from "../../src/workspace.js";
 import type { Clock } from "../../src/types.js";
+import { withRunnerProcessLock } from "./process-lock.js";
 
 /** Default duration of a runner lease in milliseconds. */
 export const DEFAULT_RUNNER_LEASE_TTL_MS = 10 * 60 * 1000;
@@ -273,7 +274,8 @@ export class RunnerLeaseManager {
   }
 
   #serialize<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#transitions.then(operation);
+    const previous = this.#transitions;
+    const result = withRunnerProcessLock(() => previous.then(operation));
     this.#transitions = result.then(
       () => undefined,
       () => undefined,
